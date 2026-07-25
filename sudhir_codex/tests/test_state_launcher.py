@@ -501,6 +501,38 @@ X-Test = "value"
         terminate.assert_called_once_with(4321)
         process_command.assert_not_called()
 
+    def test_windows_stop_retries_while_pid_file_is_still_locked(self) -> None:
+        self.paths.gateway_dir.mkdir(parents=True)
+        self.paths.pid_file.write_text("4321\n", encoding="ascii")
+        with (
+            mock.patch(
+                "sudhir_codex_gateway.management._process_alive",
+                side_effect=[True, False, False],
+            ),
+            mock.patch(
+                "sudhir_codex_gateway.management.gateway_status",
+                return_value={
+                    "running": True,
+                    "pid": 4321,
+                    "process_alive": True,
+                    "health": {
+                        "service": "sudhir-codex-gateway",
+                        "pid": 4321,
+                    },
+                },
+            ),
+            mock.patch(
+                "sudhir_codex_gateway.management.is_windows",
+                return_value=True,
+            ),
+            mock.patch("pathlib.Path.unlink", side_effect=[PermissionError, None]),
+            mock.patch("sudhir_codex_gateway.management.terminate_process"),
+            mock.patch("sudhir_codex_gateway.management.time.sleep") as sleep,
+        ):
+            self.assertTrue(stop_gateway(self.paths))
+
+        sleep.assert_called_once_with(0.1)
+
     def test_windows_stop_refuses_health_from_another_pid(self) -> None:
         self.paths.gateway_dir.mkdir(parents=True)
         self.paths.pid_file.write_text("4321\n", encoding="ascii")
