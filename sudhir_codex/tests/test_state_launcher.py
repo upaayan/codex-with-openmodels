@@ -370,6 +370,53 @@ X-Test = "value"
 
         self.assert_private_access(self.paths.start_lock_file, 0o600)
 
+    def test_gateway_start_timeout_reports_last_health_state(self) -> None:
+        python = self.paths.venv_python
+        python.parent.mkdir(parents=True)
+        python.touch()
+        initial = {
+            "running": False,
+            "pid": None,
+            "process_alive": False,
+            "health": None,
+        }
+        last_status = {
+            "running": False,
+            "pid": 4321,
+            "process_alive": True,
+            "health": {
+                "service": "sudhir-codex-gateway",
+                "instance_id": "observed",
+                "pid": 4321,
+            },
+        }
+        with (
+            mock.patch(
+                "sudhir_codex_gateway.management.gateway_status",
+                side_effect=[initial, last_status],
+            ),
+            mock.patch("sudhir_codex_gateway.management.subprocess.Popen") as popen,
+            mock.patch(
+                "sudhir_codex_gateway.platform_support._restrict_windows_acl"
+            ),
+            mock.patch(
+                "sudhir_codex_gateway.management.time.monotonic",
+                side_effect=[0.0, 0.0, 1.0],
+            ),
+            mock.patch("sudhir_codex_gateway.management.time.sleep"),
+        ):
+            process = popen.return_value
+            process.pid = 4321
+            process.poll.return_value = None
+
+            with self.assertRaises(GatewayError) as raised:
+                start_gateway(self.paths, timeout_seconds=1.0)
+
+        self.assertEqual(raised.exception.code, "gateway_start_timeout")
+        self.assertIn('"process_alive": true', raised.exception.message)
+        self.assertIn('"instance_id": "observed"', raised.exception.message)
+        process.terminate.assert_called_once_with()
+
     def test_windows_stop_uses_private_health_check_not_ps(self) -> None:
         self.paths.gateway_dir.mkdir(parents=True)
         self.paths.pid_file.write_text("4321\n", encoding="ascii")
