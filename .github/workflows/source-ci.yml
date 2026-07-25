@@ -226,7 +226,14 @@ jobs:
           $Started = $false
           try {
             & $GatewayPython -m sudhir_codex_gateway.management start
-            if ($LASTEXITCODE -ne 0) { throw "Gateway start smoke failed" }
+            $GatewayStartExit = $LASTEXITCODE
+            if ($GatewayStartExit -ne 0) {
+              $GatewayLog = Join-Path $State "gateway\gateway.log"
+              if (Test-Path -LiteralPath $GatewayLog -PathType Leaf) {
+                Get-Content -LiteralPath $GatewayLog
+              }
+              throw "Gateway start smoke failed"
+            }
             $Started = $true
 
             $StatusJson = (& $GatewayPython -m sudhir_codex_gateway.management status --json) -join "`n"
