@@ -166,7 +166,8 @@ if (-not (Test-Path -LiteralPath (Join-Path $Root "sudhir_codex\pyproject.toml")
     throw "Python gateway source is missing from $Root"
 }
 
-$PythonCommand = Get-Command $Python -CommandType Application -ErrorAction Stop
+$PythonCommand = Get-Command $Python -CommandType Application -ErrorAction Stop |
+    Select-Object -First 1
 & $PythonCommand.Source -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)"
 Assert-NativeSuccess -Description "Python 3.11+ requirement check"
 
