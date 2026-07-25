@@ -93,7 +93,7 @@ jobs:
             codesign --force --sign - "$stage/$binary"
             codesign --verify --verbose=2 "$stage/$binary"
             file "$stage/$binary" | grep -q 'arm64'
-            lipo -verify_arch arm64 "$stage/$binary"
+            lipo "$stage/$binary" -verify_arch arm64
           done
           "$stage/codex" --version
           "$stage/codex" --help >/dev/null
