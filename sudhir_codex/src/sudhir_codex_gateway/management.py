@@ -224,8 +224,12 @@ def stop_gateway(paths: RuntimePaths, *, timeout_seconds: float = 10.0) -> bool:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         if not _process_alive(pid):
-            paths.pid_file.unlink(missing_ok=True)
-            return True
+            try:
+                paths.pid_file.unlink(missing_ok=True)
+                return True
+            except PermissionError:
+                if not is_windows():
+                    raise
         time.sleep(0.1)
     raise GatewayError(
         70,
