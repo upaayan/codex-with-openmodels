@@ -1,0 +1,93 @@
+name: monthly-upstream-check
+
+on:
+  schedule:
+    - cron: "17 3 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    name: Compare recorded base with openai/codex main
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Create or update one upstream-change issue
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        with:
+          script: |
+            const fs = require("fs");
+            const recorded = fs
+              .readFileSync(".github/upstream-base.txt", "utf8")
+              .trim();
+            if (!/^[0-9a-f]{40}$/.test(recorded)) {
+              core.setFailed("Recorded upstream base is not a full commit SHA");
+              return;
+            }
+
+            const upstream = await github.request(
+              "GET /repos/{owner}/{repo}/commits/{ref}",
+              {
+                owner: "openai",
+                repo: "codex",
+                ref: "main",
+              },
+            );
+            const current = upstream.data.sha;
+            core.info(`Recorded upstream base: ${recorded}`);
+            core.info(`Current openai/codex main: ${current}`);
+            if (current === recorded) {
+              core.info("The recorded upstream base is current.");
+              return;
+            }
+
+            const title = "Upstream OpenAI Codex has changed";
+            const body = [
+              "The monthly read-only check found a newer `openai/codex` `main`.",
+              "",
+              `- Recorded fork base: \`${recorded}\``,
+              `- Current upstream: \`${current}\``,
+              "",
+              "No branch, tag, release, or source file was changed automatically.",
+              "Integrate through a reviewed branch and rerun the affected checks.",
+            ].join("\n");
+
+            const openIssues = await github.paginate(
+              github.rest.issues.listForRepo,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: "open",
+                per_page: 100,
+              },
+            );
+            const existing = openIssues.find(
+              (issue) => !issue.pull_request && issue.title === title,
+            );
+            if (existing) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body,
+              });
+              core.info(`Updated issue #${existing.number}.`);
+              return;
+            }
+
+            const created = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body,
+            });
+            core.info(`Created issue #${created.data.number}.`);

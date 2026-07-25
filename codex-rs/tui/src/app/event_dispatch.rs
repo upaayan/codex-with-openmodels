@@ -1222,6 +1222,11 @@ impl App {
                 self.sync_active_thread_reasoning_setting(app_server, effort)
                     .await;
             }
+            AppEvent::UpdateActiveReasoningEffort(effort) => {
+                self.on_update_active_reasoning_effort(effort.clone());
+                self.sync_active_thread_reasoning_setting(app_server, effort)
+                    .await;
+            }
             AppEvent::UpdateModel(model) => {
                 let model_changed = self.chat_widget.current_model() != model
                     || self.chat_widget.current_collaboration_mode().model() != model;
@@ -2077,6 +2082,11 @@ impl App {
             }
             AppEvent::UpdatePlanModeReasoningEffort(effort) => {
                 self.on_update_plan_mode_reasoning_effort(effort);
+                self.sync_active_thread_plan_mode_reasoning_setting(app_server)
+                    .await;
+            }
+            AppEvent::UpdateActivePlanModeReasoningEffort(effort) => {
+                self.on_update_active_plan_mode_reasoning_effort(effort);
                 self.sync_active_thread_plan_mode_reasoning_setting(app_server)
                     .await;
             }

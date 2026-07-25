@@ -1,0 +1,277 @@
+#!/bin/sh
+set -eu
+
+sudhir_root="${SUDHIR_CODEX_ROOT:-${HOME}/.playground/sudhir-codex}"
+sudhir_state="${SUDHIR_CODEX_STATE:-${HOME}/.sudhir-codex}"
+sudhir_pi_dir="${SUDHIR_CODEX_PI_AGENT_DIR:-${HOME}/.pi/agent}"
+sudhir_toolchains="${sudhir_root}/.toolchains"
+sudhir_rustup_home="${sudhir_toolchains}/rustup"
+sudhir_cargo_home="${sudhir_toolchains}/cargo"
+sudhir_rust_version="1.95.0"
+sudhir_uv="${SUDHIR_CODEX_UV:-}"
+sudhir_npm="${SUDHIR_CODEX_NPM:-}"
+sudhir_archive="${SUDHIR_CODEX_ARCHIVE:-}"
+sudhir_checksums="${SUDHIR_CODEX_CHECKSUMS:-}"
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --archive)
+            if [ "$#" -lt 2 ]; then
+                echo "install-sudhir-codex: --archive requires a path" >&2
+                exit 64
+            fi
+            sudhir_archive="$2"
+            shift 2
+            ;;
+        --checksums)
+            if [ "$#" -lt 2 ]; then
+                echo "install-sudhir-codex: --checksums requires a path" >&2
+                exit 64
+            fi
+            sudhir_checksums="$2"
+            shift 2
+            ;;
+        -h|--help)
+            echo "usage: install-sudhir-codex [--archive PATH --checksums PATH]"
+            exit 0
+            ;;
+        *)
+            echo "install-sudhir-codex: unknown argument $1" >&2
+            exit 64
+            ;;
+    esac
+done
+
+if [ ! -d "${sudhir_root}/codex-rs" ]; then
+    echo "install-sudhir-codex: expected fork checkout at ${sudhir_root}" >&2
+    exit 66
+fi
+
+if { [ -n "${sudhir_archive}" ] && [ -z "${sudhir_checksums}" ]; } ||
+    { [ -z "${sudhir_archive}" ] && [ -n "${sudhir_checksums}" ]; }; then
+    echo "install-sudhir-codex: --archive and --checksums must be used together" >&2
+    exit 64
+fi
+
+sudhir_prebuilt=0
+if [ -n "${sudhir_archive}" ]; then
+    if [ ! -f "${sudhir_archive}" ] || [ ! -f "${sudhir_checksums}" ]; then
+        echo "install-sudhir-codex: release archive or SHA256SUMS is missing" >&2
+        exit 66
+    fi
+
+    sudhir_system="$(uname -s)"
+    sudhir_machine="$(uname -m)"
+    case "${sudhir_system}:${sudhir_machine}" in
+        Darwin:arm64|Darwin:aarch64)
+            sudhir_expected_archive="codex-with-openmodels-aarch64-apple-darwin.tar.gz"
+            sudhir_expected_entries="$(printf '%s\n' \
+                codex \
+                codex-code-mode-host \
+                codex-responses-api-proxy |
+                LC_ALL=C sort)"
+            ;;
+        Linux:x86_64|Linux:amd64)
+            sudhir_expected_archive="codex-with-openmodels-x86_64-unknown-linux-musl.tar.gz"
+            sudhir_expected_entries="$(printf '%s\n' \
+                codex \
+                codex-code-mode-host \
+                codex-resources/bwrap \
+                codex-responses-api-proxy |
+                LC_ALL=C sort)"
+            ;;
+        *)
+            echo "install-sudhir-codex: no prebuilt release for ${sudhir_system} ${sudhir_machine}" >&2
+            exit 69
+            ;;
+    esac
+
+    if [ "$(basename "${sudhir_archive}")" != "${sudhir_expected_archive}" ]; then
+        echo "install-sudhir-codex: expected archive ${sudhir_expected_archive}" >&2
+        exit 65
+    fi
+    sudhir_expected_hashes="$(
+        awk -v name="${sudhir_expected_archive}" \
+            '$2 == name || $2 == "*" name { print tolower($1) }' \
+            "${sudhir_checksums}"
+    )"
+    sudhir_hash_count="$(
+        printf '%s\n' "${sudhir_expected_hashes}" |
+            awk 'NF { count++ } END { print count + 0 }'
+    )"
+    if [ "${sudhir_hash_count}" -ne 1 ]; then
+        echo "install-sudhir-codex: SHA256SUMS must contain exactly one matching entry" >&2
+        exit 65
+    fi
+    sudhir_expected_hash="$(
+        printf '%s\n' "${sudhir_expected_hashes}" |
+            awk 'NF { print; exit }'
+    )"
+    if ! printf '%s\n' "${sudhir_expected_hash}" |
+        grep -Eq '^[0-9a-f]{64}$'; then
+        echo "install-sudhir-codex: matching SHA-256 is invalid" >&2
+        exit 65
+    fi
+    case "${sudhir_system}" in
+        Darwin)
+            sudhir_actual_hash="$(
+                shasum -a 256 "${sudhir_archive}" |
+                    awk '{ print tolower($1) }'
+            )"
+            ;;
+        Linux)
+            sudhir_actual_hash="$(
+                sha256sum "${sudhir_archive}" |
+                    awk '{ print tolower($1) }'
+            )"
+            ;;
+    esac
+    if [ "${sudhir_actual_hash}" != "${sudhir_expected_hash}" ]; then
+        echo "install-sudhir-codex: SHA-256 mismatch for ${sudhir_expected_archive}" >&2
+        exit 65
+    fi
+
+    sudhir_actual_entries="$(tar -tzf "${sudhir_archive}" | LC_ALL=C sort)"
+    if [ "${sudhir_actual_entries}" != "${sudhir_expected_entries}" ]; then
+        echo "install-sudhir-codex: archive entries do not match the release layout" >&2
+        exit 65
+    fi
+    sudhir_prebuilt_dir="$(
+        mktemp -d "${TMPDIR:-/tmp}/sudhir-codex-prebuilt.XXXXXX"
+    )"
+    trap 'rm -rf "${sudhir_prebuilt_dir}"' EXIT HUP INT TERM
+    tar -xzf "${sudhir_archive}" -C "${sudhir_prebuilt_dir}"
+    for sudhir_entry in ${sudhir_expected_entries}; do
+        if [ ! -s "${sudhir_prebuilt_dir}/${sudhir_entry}" ]; then
+            echo "install-sudhir-codex: archive entry ${sudhir_entry} is empty" >&2
+            exit 65
+        fi
+    done
+    sudhir_prebuilt=1
+fi
+
+if [ -z "${sudhir_uv}" ]; then
+    if command -v uv >/dev/null 2>&1; then
+        sudhir_uv="$(command -v uv)"
+    elif [ -x "${HOME}/.local/bin/uv" ]; then
+        sudhir_uv="${HOME}/.local/bin/uv"
+    else
+        echo "install-sudhir-codex: uv is required" >&2
+        exit 69
+    fi
+fi
+
+if [ -z "${sudhir_npm}" ]; then
+    if [ -x "/opt/homebrew/bin/npm" ]; then
+        sudhir_npm="/opt/homebrew/bin/npm"
+    elif command -v npm >/dev/null 2>&1; then
+        sudhir_npm="$(command -v npm)"
+    else
+        echo "install-sudhir-codex: Node.js and npm are required for Cursor models" >&2
+        exit 69
+    fi
+fi
+
+if [ "${sudhir_prebuilt}" -eq 0 ]; then
+    mkdir -p "${sudhir_toolchains}" "${sudhir_cargo_home}" "${sudhir_rustup_home}"
+    export RUSTUP_HOME="${sudhir_rustup_home}"
+    export CARGO_HOME="${sudhir_cargo_home}"
+    export PATH="${sudhir_cargo_home}/bin:${PATH}"
+
+    if [ ! -x "${sudhir_cargo_home}/bin/rustup" ]; then
+        sudhir_temp="$(mktemp -d "${TMPDIR:-/tmp}/sudhir-codex-rustup.XXXXXX")"
+        trap 'rm -rf "${sudhir_temp}"' EXIT HUP INT TERM
+        curl --proto '=https' --tlsv1.2 -sSf \
+            https://sh.rustup.rs \
+            -o "${sudhir_temp}/rustup-init.sh"
+        sh "${sudhir_temp}/rustup-init.sh" \
+            -y \
+            --no-modify-path \
+            --profile minimal \
+            --default-toolchain none
+    fi
+
+    rustup toolchain install "${sudhir_rust_version}" --profile minimal
+    rustup default "${sudhir_rust_version}"
+fi
+
+"${sudhir_uv}" venv --python python3 "${sudhir_root}/.venv"
+"${sudhir_uv}" pip install \
+    --python "${sudhir_root}/.venv/bin/python" \
+    --editable "${sudhir_root}/sudhir_codex"
+
+(
+    cd "${sudhir_root}/sudhir_codex/cursor_worker"
+    PATH="$(dirname "${sudhir_npm}"):${PATH}" \
+        "${sudhir_npm}" ci --omit=dev
+)
+
+mkdir -p "${sudhir_root}/dist" "${HOME}/.local/bin"
+if [ "${sudhir_prebuilt}" -eq 1 ]; then
+    for sudhir_binary in \
+        sudhir-codex-core \
+        codex-code-mode-host \
+        codex-responses-api-proxy; do
+        if [ "${sudhir_binary}" = "sudhir-codex-core" ]; then
+            sudhir_source_binary="${sudhir_prebuilt_dir}/codex"
+        else
+            sudhir_source_binary="${sudhir_prebuilt_dir}/${sudhir_binary}"
+        fi
+        sudhir_target_binary="${sudhir_root}/dist/${sudhir_binary}"
+        if [ -f "${sudhir_target_binary}" ]; then
+            cp -p "${sudhir_target_binary}" "${sudhir_target_binary}.previous"
+        fi
+        install -m 0755 "${sudhir_source_binary}" "${sudhir_target_binary}"
+    done
+    if [ "${sudhir_system}" = "Linux" ]; then
+        mkdir -p "${sudhir_root}/dist/codex-resources"
+        sudhir_target_bwrap="${sudhir_root}/dist/codex-resources/bwrap"
+        if [ -f "${sudhir_target_bwrap}" ]; then
+            cp -p "${sudhir_target_bwrap}" "${sudhir_target_bwrap}.previous"
+        fi
+        install -m 0755 \
+            "${sudhir_prebuilt_dir}/codex-resources/bwrap" \
+            "${sudhir_target_bwrap}"
+    fi
+else
+    (
+        cd "${sudhir_root}/codex-rs"
+        cargo build --locked --release --package codex-cli --bin codex
+    )
+
+    install -m 0755 \
+        "${sudhir_root}/codex-rs/target/release/codex" \
+        "${sudhir_root}/dist/sudhir-codex-core"
+    case "$(uname -s)" in
+        Darwin)
+            strip -S "${sudhir_root}/dist/sudhir-codex-core"
+            ;;
+        Linux)
+            strip --strip-debug "${sudhir_root}/dist/sudhir-codex-core"
+            ;;
+        *)
+            echo "install-sudhir-codex: unsupported platform for deployment stripping" >&2
+            exit 69
+            ;;
+    esac
+fi
+install -m 0755 \
+    "${sudhir_root}/scripts/sudhir-codex" \
+    "${HOME}/.local/bin/sudhir-codex"
+
+export SUDHIR_CODEX_ROOT="${sudhir_root}"
+export SUDHIR_CODEX_STATE="${sudhir_state}"
+export SUDHIR_CODEX_PI_AGENT_DIR="${sudhir_pi_dir}"
+
+"${sudhir_root}/.venv/bin/python" \
+    -m sudhir_codex_gateway.management init
+if [ ! -f "${sudhir_state}/auth.json" ] &&
+    [ -f "${HOME}/.codex/auth.json" ]; then
+    "${sudhir_root}/.venv/bin/python" \
+        -m sudhir_codex_gateway.management auth-import
+fi
+"${sudhir_root}/.venv/bin/python" \
+    -m sudhir_codex_gateway.management mcp-import
+
+echo "Installed ${HOME}/.local/bin/sudhir-codex"
+echo "Private state: ${sudhir_state}"

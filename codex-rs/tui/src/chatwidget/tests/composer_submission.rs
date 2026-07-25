@@ -93,7 +93,9 @@ async fn parent_owned_thread_blocks_settings_shortcuts() {
         AppEvent::SubmitThreadOp { .. }
             | AppEvent::UpdateModel(_)
             | AppEvent::UpdateReasoningEffort(_)
+            | AppEvent::UpdateActiveReasoningEffort(_)
             | AppEvent::UpdatePlanModeReasoningEffort(_)
+            | AppEvent::UpdateActivePlanModeReasoningEffort(_)
     )));
 
     let rendered = events

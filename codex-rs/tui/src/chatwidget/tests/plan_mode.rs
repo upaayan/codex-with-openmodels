@@ -350,13 +350,13 @@ async fn reasoning_selection_in_plan_mode_without_effort_change_does_not_open_sc
     assert!(
         events
             .iter()
-            .any(|event| matches!(event, AppEvent::UpdateReasoningEffort(Some(_)))),
+            .any(|event| matches!(event, AppEvent::UpdateActiveReasoningEffort(Some(_)))),
         "expected reasoning update event; events: {events:?}"
     );
 }
 
 #[tokio::test]
-async fn reasoning_selection_in_plan_mode_matching_plan_effort_but_different_global_opens_scope_prompt()
+async fn reasoning_selection_in_plan_mode_matching_plan_effort_but_different_task_effort_opens_scope_prompt()
  {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     chat.thread_id = Some(ThreadId::new());
@@ -368,8 +368,9 @@ async fn reasoning_selection_in_plan_mode_matching_plan_effort_but_different_glo
     set_chatgpt_auth(&mut chat);
 
     // Reproduce: Plan effective reasoning remains the preset (medium), but the
-    // global default differs (high). Pressing Enter on the current Plan choice
-    // should open the scope prompt rather than silently rewriting the global default.
+    // active task's default-mode effort differs (high). Pressing Enter on the
+    // current Plan choice should open the scope prompt instead of silently
+    // rewriting the task's default-mode effort.
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
 
     let preset = get_available_model(&chat, "gpt-5.4");
@@ -403,7 +404,7 @@ async fn reasoning_shortcut_in_plan_mode_updates_plan_override_without_prompt_or
     assert!(
         events.iter().any(|event| matches!(
             event,
-            AppEvent::UpdatePlanModeReasoningEffort(Some(ReasoningEffortConfig::High))
+            AppEvent::UpdateActivePlanModeReasoningEffort(Some(ReasoningEffortConfig::High))
         )),
         "expected plan reasoning override update event; events: {events:?}"
     );
@@ -428,13 +429,13 @@ async fn reasoning_shortcut_in_plan_mode_updates_plan_override_without_prompt_or
     assert!(
         events
             .iter()
-            .all(|event| !matches!(event, AppEvent::UpdateReasoningEffort(_))),
+            .all(|event| !matches!(event, AppEvent::UpdateActiveReasoningEffort(_))),
         "expected no global reasoning update event; events: {events:?}"
     );
 }
 
 #[tokio::test]
-async fn advanced_reasoning_selection_in_plan_mode_uses_expected_scope() {
+async fn max_and_ultra_reasoning_selection_in_plan_mode_uses_expected_scope() {
     for effort in [ReasoningEffortConfig::Ultra, ReasoningEffortConfig::Max] {
         let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
         chat.thread_id = Some(ThreadId::new());
@@ -445,37 +446,34 @@ async fn advanced_reasoning_selection_in_plan_mode_uses_expected_scope() {
         let _ = drain_insert_history(&mut rx);
 
         let mut preset = get_available_model(&chat, "gpt-5.4");
-        preset.supported_reasoning_efforts = vec![ReasoningEffortPreset {
-            effort: effort.clone(),
-            description: "Advanced reasoning".to_string(),
-        }];
-        chat.open_advanced_reasoning_popup(preset);
+        preset.default_reasoning_effort = ReasoningEffortConfig::High;
+        preset.supported_reasoning_efforts = vec![
+            ReasoningEffortPreset {
+                effort: ReasoningEffortConfig::High,
+                description: "High reasoning".to_string(),
+            },
+            ReasoningEffortPreset {
+                effort: effort.clone(),
+                description: "Maximum reasoning".to_string(),
+            },
+        ];
+        chat.open_reasoning_popup(preset);
+        while rx.try_recv().is_ok() {}
+        chat.handle_key_event(KeyEvent::from(KeyCode::Down));
         chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
         let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
-        if effort == ReasoningEffortConfig::Ultra {
-            assert!(events.iter().any(|event| matches!(
-                event,
-                AppEvent::ApplyAdvancedReasoning {
-                    model,
-                    effort: ReasoningEffortConfig::Ultra,
-                } if model == "gpt-5.4"
-            )));
-            assert!(events.iter().all(|event| !matches!(
-                event,
-                AppEvent::OpenPlanReasoningScopePrompt { .. }
-                    | AppEvent::PersistPlanModeReasoningEffort(_)
-                    | AppEvent::PersistModelSelection { .. }
-            )));
-        } else {
-            assert!(events.iter().any(|event| matches!(
-                event,
-                AppEvent::OpenPlanReasoningScopePrompt {
-                    model,
-                    effort: Some(ReasoningEffortConfig::Max),
-                } if model == "gpt-5.4"
-            )));
-        }
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AppEvent::OpenPlanReasoningScopePrompt {
+                model,
+                effort: Some(selected_effort),
+            } if model == "gpt-5.4" && selected_effort == &effort
+        )));
+        assert!(events.iter().all(|event| !matches!(
+            event,
+            AppEvent::PersistPlanModeReasoningEffort(_) | AppEvent::PersistModelSelection { .. }
+        )));
     }
 }
 
@@ -528,13 +526,13 @@ async fn reasoning_selection_in_plan_mode_model_switch_does_not_open_scope_promp
     assert!(
         events
             .iter()
-            .any(|event| matches!(event, AppEvent::UpdateReasoningEffort(Some(_)))),
+            .any(|event| matches!(event, AppEvent::UpdateActiveReasoningEffort(Some(_)))),
         "expected reasoning update event; events: {events:?}"
     );
 }
 
 #[tokio::test]
-async fn plan_reasoning_scope_popup_all_modes_persists_global_and_plan_override() {
+async fn plan_reasoning_scope_popup_all_modes_persists_only_plan_override() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     chat.open_plan_reasoning_scope_prompt("gpt-5.4".to_string(), Some(ReasoningEffortConfig::High));
 
@@ -542,6 +540,13 @@ async fn plan_reasoning_scope_popup_all_modes_persists_global_and_plan_override(
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdateActiveReasoningEffort(Some(ReasoningEffortConfig::High))
+        )),
+        "expected active-task reasoning to be updated; events: {events:?}"
+    );
     assert!(
         events.iter().any(|event| matches!(
             event,
@@ -557,12 +562,9 @@ async fn plan_reasoning_scope_popup_all_modes_persists_global_and_plan_override(
         "expected updated plan override to be persisted; events: {events:?}"
     );
     assert!(
-        events.iter().any(|event| matches!(
-            event,
-            AppEvent::PersistModelSelection { model, effort: Some(ReasoningEffortConfig::High) }
-                if model == "gpt-5.4"
-        )),
-        "expected global model reasoning selection persistence; events: {events:?}"
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::PersistModelSelection { .. }))
     );
 }
 
@@ -703,7 +705,7 @@ async fn plan_reasoning_scope_popup_mentions_selected_reasoning() {
     assert!(popup.contains("Choose where to apply medium reasoning."));
     assert!(popup.contains("Always use medium reasoning in Plan mode."));
     assert!(popup.contains("Apply to Plan mode override"));
-    assert!(popup.contains("Apply to global default and Plan mode override"));
+    assert!(popup.contains("Apply to active task and Plan mode override"));
     assert!(popup.contains("user-chosen Plan override (low)"));
 }
 
@@ -737,7 +739,7 @@ async fn plan_reasoning_scope_popup_plan_only_does_not_update_all_modes_reasonin
     assert!(
         events
             .iter()
-            .all(|event| !matches!(event, AppEvent::UpdateReasoningEffort(_))),
+            .all(|event| !matches!(event, AppEvent::UpdateActiveReasoningEffort(_))),
         "did not expect all-modes reasoning update; events: {events:?}"
     );
 }

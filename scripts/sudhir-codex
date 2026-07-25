@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+sudhir_root="${SUDHIR_CODEX_ROOT:-${HOME}/.playground/sudhir-codex}"
+sudhir_python="${sudhir_root}/.venv/bin/python"
+
+if [ ! -x "${sudhir_python}" ]; then
+    echo "sudhir-codex: private Python runtime is missing; run ${sudhir_root}/scripts/install-sudhir-codex" >&2
+    exit 69
+fi
+
+export SUDHIR_CODEX_ROOT="${sudhir_root}"
+exec "${sudhir_python}" -m sudhir_codex_gateway.launcher "$@"

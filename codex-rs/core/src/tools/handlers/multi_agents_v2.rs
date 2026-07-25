@@ -58,9 +58,13 @@ fn communication_from_tool_message(
     author: AgentPath,
     recipient: AgentPath,
     message: String,
+    turn: &crate::session::turn_context::TurnContext,
     source: &crate::tools::context::ToolCallSource,
     trigger_turn: bool,
 ) -> InterAgentCommunication {
+    if turn.model_info.slug.starts_with("pi-") {
+        return InterAgentCommunication::new(author, recipient, Vec::new(), message, trigger_turn);
+    }
     if !matches!(
         source,
         crate::tools::context::ToolCallSource::DirectPlaintextMessage
