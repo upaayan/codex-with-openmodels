@@ -188,7 +188,10 @@ def _start_gateway_locked(
     raise GatewayError(
         70,
         "gateway_start_timeout",
-        f"Gateway did not become ready; inspect {paths.gateway_log}",
+        (
+            "Gateway did not become ready; last health state: "
+            f"{json.dumps(status, sort_keys=True)}; inspect {paths.gateway_log}"
+        ),
     )
 
 
