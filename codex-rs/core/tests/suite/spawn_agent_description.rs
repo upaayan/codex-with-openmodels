@@ -198,9 +198,10 @@ async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() ->
         "expected visible model summary in spawn_agent description: {description:?}"
     );
     assert!(
-        description
-            .contains("Available model overrides (optional; inherited parent model is preferred):"),
-        "expected model choices to be framed as overrides in spawn_agent description: {description:?}"
+        description.contains(
+            "Example model overrides (not exhaustive; any exact picker or `sudhir-codex models` ID is accepted):"
+        ),
+        "expected a bounded, non-exhaustive model sample in spawn_agent description: {description:?}"
     );
     assert!(
         description.contains(

@@ -608,6 +608,45 @@ fn maybe_wrap_shell_lc_with_snapshot_unsets_absent_permission_profile() {
 }
 
 #[test]
+fn maybe_wrap_shell_lc_with_snapshot_unsets_gateway_token_after_snapshot_and_override() {
+    let dir = tempdir().expect("create temp dir");
+    let snapshot_path = dir.path().join("snapshot.sh");
+    std::fs::write(
+        &snapshot_path,
+        "# Snapshot file\nexport SUDHIR_CODEX_GATEWAY_TOKEN='stale-token'\n",
+    )
+    .expect("write snapshot");
+    let (session_shell, shell_snapshot) =
+        shell_with_snapshot(ShellType::Bash, "/bin/bash", snapshot_path.abs());
+    let command = vec![
+        "/bin/bash".to_string(),
+        "-lc".to_string(),
+        format!(
+            "if [ \"${{{SUDHIR_CODEX_GATEWAY_TOKEN_ENV_VAR}+x}}\" = x ]; then printf leak; else printf hidden; fi"
+        ),
+    ];
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+        &command,
+        &session_shell,
+        Some(&shell_snapshot),
+        &HashMap::from([(
+            SUDHIR_CODEX_GATEWAY_TOKEN_ENV_VAR.to_string(),
+            "configured-token".to_string(),
+        )]),
+        &HashMap::new(),
+        &RuntimePathPrepends::default(),
+    );
+    let output = Command::new(&rewritten[0])
+        .args(&rewritten[1..])
+        .env_remove(SUDHIR_CODEX_GATEWAY_TOKEN_ENV_VAR)
+        .output()
+        .expect("run rewritten command");
+
+    assert!(output.status.success(), "command failed: {output:?}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "hidden");
+}
+
+#[test]
 fn maybe_wrap_shell_lc_with_snapshot_restores_proxy_env_from_process_env() {
     let dir = tempdir().expect("create temp dir");
     let snapshot_path = dir.path().join("snapshot.sh");

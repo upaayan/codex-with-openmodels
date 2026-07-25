@@ -6,6 +6,7 @@ use std::time::Duration;
 use std::time::SystemTime;
 
 use crate::StateDbHandle;
+use crate::exec_env::SUDHIR_CODEX_GATEWAY_TOKEN_ENV_VAR;
 use crate::rollout::list::find_thread_path_by_id_str;
 use crate::session::turn_context::TurnEnvironment;
 use crate::shell::Shell;
@@ -43,7 +44,7 @@ pub(crate) struct ShellSnapshotFile {
 const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10);
 const SNAPSHOT_RETENTION: Duration = Duration::from_secs(60 * 60 * 24 * 3); // 3 days retention.
 const SNAPSHOT_DIR: &str = "shell_snapshots";
-const EXCLUDED_EXPORT_VARS: &[&str] = &["PWD", "OLDPWD"];
+const EXCLUDED_EXPORT_VARS: &[&str] = &["PWD", "OLDPWD", SUDHIR_CODEX_GATEWAY_TOKEN_ENV_VAR];
 
 impl ShellSnapshot {
     pub(crate) fn new(

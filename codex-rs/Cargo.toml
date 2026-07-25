@@ -535,15 +535,16 @@ debug = "none"
 strip = "symbols"
 
 [profile.release]
+opt-level = 3
 lto = "thin"
 debug = "line-tables-only"
 split-debuginfo = "off"
-# Keep release binaries symbolicateable until packaging has archived the
-# sidecar symbols and stripped the binaries.
+# Keep Cargo's release artifact symbolicateable; packaging strips only the
+# separate deployment copy.
 strip = false
 
-# Balance parallel release code generation against binary size.
-codegen-units = 4
+# Keep ThinLTO parallel enough for a practical personal-fork release build.
+codegen-units = 16
 
 [profile.profiling]
 inherits = "release"

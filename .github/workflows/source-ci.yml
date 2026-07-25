@@ -1,0 +1,286 @@
+name: source-ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: source-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  public-source:
+    name: Public source boundaries
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Check licence, files, and workflow surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f LICENSE
+          test -f NOTICE
+          test -f MODIFICATIONS.md
+          test -f .github/upstream-base.txt
+
+          workflow_count="$(
+            find .github/workflows -maxdepth 1 -type f \
+              \( -name '*.yml' -o -name '*.yaml' \) |
+              wc -l |
+              tr -d ' '
+          )"
+          [[ "$workflow_count" == "3" ]]
+
+          forbidden_paths=(
+            documents/BACKEND-MONTHLY-UPGRADE.md
+            documents/FRONTEND-UPDATE.md
+            documents/README.md
+            documents/THREAD-IMPORT.md
+            documents/plan-audit-implementation/sudhir_codex_audit.md
+            documents/plan-audit-implementation/sudhir_codex_implementation.md
+            documents/plan-audit-implementation/sudhir_codex_plan.md
+            scripts/normalize-sudhir-thread-providers.rb
+          )
+          for path in "${forbidden_paths[@]}"; do
+            if git ls-files --error-unmatch "$path" >/dev/null 2>&1; then
+              echo "Private operational file is tracked: $path" >&2
+              exit 1
+            fi
+          done
+
+          if git ls-files | grep -E '(^|/)(node_modules|target|dist|\.venv|\.toolchains)(/|$)'; then
+            echo "Generated or machine-local content is tracked" >&2
+            exit 1
+          fi
+          privileged_pr_trigger="pull_request""_target"
+          if git grep -n "$privileged_pr_trigger" -- .github/workflows; then
+            echo "A privileged pull-request trigger is forbidden" >&2
+            exit 1
+          fi
+          if git grep -nE '/Users/|/Applications/Sudhir-Codex\.app' \
+            -- README.md MODIFICATIONS.md sudhir_codex/README.md; then
+            echo "Personal or private desktop paths remain in public documentation" >&2
+            exit 1
+          fi
+
+  gateway-linux:
+    name: Gateway and Cursor worker (Ubuntu)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: "22.13.1"
+          cache: npm
+          cache-dependency-path: sudhir_codex/cursor_worker/package-lock.json
+
+      - name: Install the gateway test environment
+        run: python -m pip install --disable-pip-version-check --editable ./sudhir_codex ruff==0.15.13
+
+      - name: Check and test the gateway
+        run: |
+          python -m compileall -q sudhir_codex/src sudhir_codex/tests
+          python -m unittest discover -s sudhir_codex/tests -v
+          ruff check sudhir_codex/src sudhir_codex/tests
+
+      - name: Check the pinned Cursor worker
+        working-directory: sudhir_codex/cursor_worker
+        run: |
+          npm ci --omit=dev
+          node --check worker.mjs
+          npm ls --omit=dev @cursor/sdk
+
+  gateway-windows:
+    name: Gateway, installer, and Cursor worker (Windows)
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: "22.13.1"
+          cache: npm
+          cache-dependency-path: sudhir_codex/cursor_worker/package-lock.json
+
+      - name: Install the gateway test environment
+        shell: pwsh
+        run: python -m pip install --disable-pip-version-check --editable ./sudhir_codex ruff==0.15.13
+
+      - name: Check and test the native Windows gateway
+        shell: pwsh
+        run: |
+          python -m compileall -q sudhir_codex/src sudhir_codex/tests
+          python -m unittest discover -s sudhir_codex/tests -v
+          ruff check sudhir_codex/src sudhir_codex/tests
+
+      - name: Check the pinned Windows Cursor worker
+        working-directory: sudhir_codex/cursor_worker
+        shell: pwsh
+        run: |
+          npm ci --omit=dev
+          node --check worker.mjs
+          npm ls --omit=dev @cursor/sdk @cursor/sdk-win32-x64
+
+          $WorkerSmokeRoot = Join-Path $env:RUNNER_TEMP "cursor-worker-startup"
+          $WorkerState = Join-Path $WorkerSmokeRoot "state"
+          $WorkerAuth = Join-Path $WorkerSmokeRoot "auth.json"
+          $EmptyInput = Join-Path $WorkerSmokeRoot "stdin.txt"
+          $WorkerStdout = Join-Path $WorkerSmokeRoot "stdout.log"
+          $WorkerStderr = Join-Path $WorkerSmokeRoot "stderr.log"
+          New-Item -ItemType Directory -Path $WorkerState -Force | Out-Null
+          Set-Content -LiteralPath $WorkerAuth -Value "{}" -NoNewline
+          New-Item -ItemType File -Path $EmptyInput -Force | Out-Null
+
+          $env:SUDHIR_CURSOR_AUTH_PATH = $WorkerAuth
+          $env:SUDHIR_CURSOR_STATE_DIR = $WorkerState
+          $Worker = Start-Process `
+            -FilePath (Get-Command node).Source `
+            -ArgumentList "worker.mjs" `
+            -NoNewWindow `
+            -PassThru `
+            -RedirectStandardInput $EmptyInput `
+            -RedirectStandardOutput $WorkerStdout `
+            -RedirectStandardError $WorkerStderr
+          if (-not $Worker.WaitForExit(10000)) {
+            Stop-Process -Id $Worker.Id -Force
+            throw "Cursor worker did not exit after closed stdin"
+          }
+          if ($Worker.ExitCode -ne 0) {
+            Get-Content -LiteralPath $WorkerStderr
+            throw "Cursor worker startup failed with exit code $($Worker.ExitCode)"
+          }
+
+      - name: Smoke-test Windows installation and gateway lifecycle
+        shell: pwsh
+        run: |
+          $SmokeRoot = Join-Path $env:RUNNER_TEMP "openmodels-installer-smoke"
+          $ArchiveRoot = Join-Path $SmokeRoot "archive"
+          $InstallRoot = Join-Path $SmokeRoot "checkout"
+          $State = Join-Path $SmokeRoot "state"
+          $PiAgentDir = Join-Path $SmokeRoot "pi-agent"
+          New-Item -ItemType Directory -Path $ArchiveRoot, $InstallRoot -Force | Out-Null
+          $Binaries = @(
+            "codex.exe",
+            "codex-app-server.exe",
+            "codex-code-mode-host.exe",
+            "codex-command-runner.exe",
+            "codex-responses-api-proxy.exe",
+            "codex-windows-sandbox-setup.exe"
+          )
+          foreach ($Binary in $Binaries) {
+            Set-Content -LiteralPath (Join-Path $ArchiveRoot $Binary) -Value "smoke" -Encoding Ascii
+          }
+          $Archive = Join-Path $env:RUNNER_TEMP "codex-with-openmodels-x86_64-pc-windows-msvc.zip"
+          Compress-Archive -Path (Join-Path $ArchiveRoot "*.exe") -DestinationPath $Archive
+          $Checksums = Join-Path $env:RUNNER_TEMP "SHA256SUMS"
+          $Hash = (Get-FileHash -LiteralPath $Archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$Hash  $([System.IO.Path]::GetFileName($Archive))" |
+            Set-Content -LiteralPath $Checksums -Encoding Ascii
+
+          New-Item -ItemType Directory -Path `
+            (Join-Path $InstallRoot "codex-rs"), `
+            (Join-Path $InstallRoot "sudhir_codex\cursor_worker") `
+            -Force | Out-Null
+          Copy-Item -LiteralPath .\sudhir_codex\pyproject.toml `
+            -Destination (Join-Path $InstallRoot "sudhir_codex\pyproject.toml")
+          Copy-Item -LiteralPath .\sudhir_codex\src `
+            -Destination (Join-Path $InstallRoot "sudhir_codex\src") `
+            -Recurse
+          Copy-Item -Path .\sudhir_codex\cursor_worker\package*.json `
+            -Destination (Join-Path $InstallRoot "sudhir_codex\cursor_worker")
+          Copy-Item -LiteralPath .\sudhir_codex\cursor_worker\worker.mjs `
+            -Destination (Join-Path $InstallRoot "sudhir_codex\cursor_worker\worker.mjs")
+
+          & .\scripts\sudhir-codex.ps1 `
+            -Archive $Archive `
+            -Checksums $Checksums `
+            -Root $InstallRoot `
+            -State $State `
+            -PiAgentDir $PiAgentDir
+
+          $GatewayPython = Join-Path $InstallRoot ".venv\Scripts\python.exe"
+          $env:SUDHIR_CODEX_ROOT = $InstallRoot
+          $env:SUDHIR_CODEX_STATE = $State
+          $env:SUDHIR_CODEX_PI_AGENT_DIR = $PiAgentDir
+          $Started = $false
+          try {
+            & $GatewayPython -m sudhir_codex_gateway.management start
+            if ($LASTEXITCODE -ne 0) { throw "Gateway start smoke failed" }
+            $Started = $true
+
+            $StatusJson = (& $GatewayPython -m sudhir_codex_gateway.management status --json) -join "`n"
+            if ($LASTEXITCODE -ne 0) { throw "Gateway status smoke failed" }
+            $Status = $StatusJson | ConvertFrom-Json
+            if (-not $Status.running) { throw "Gateway status did not report running" }
+          }
+          finally {
+            if ($Started) {
+              & $GatewayPython -m sudhir_codex_gateway.management stop
+              if ($LASTEXITCODE -ne 0) { throw "Gateway stop smoke failed" }
+            }
+          }
+          if (Test-Path -LiteralPath (Join-Path $State "gateway\gateway.pid")) {
+            throw "Gateway PID file remained after stop"
+          }
+
+  rust-focused:
+    name: Focused Rust checks (Ubuntu)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: rustfmt
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: nextest
+          version: 0.9.103
+
+      - name: Install focused-test system dependencies
+        run: |
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            --no-install-recommends pkg-config libcap-dev bubblewrap
+
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.3"
+
+      - name: Check formatting
+        working-directory: codex-rs
+        run: just fmt-check
+
+      - name: Run fork regressions
+        working-directory: codex-rs
+        run: |
+          just test -p codex-tui reasoning
+          just test -p codex-tui model_picker_searches_model_names_and_providers
+          just test -p codex-tui queued_settings_selection_applies_before_next_input
+          just test -p codex-tui active_reasoning_effort_does_not_change_new_task_default
+          just test -p codex-tui active_plan_reasoning_effort_does_not_change_new_task_default
+          just test -p codex-app-server config_batch_write_keeps_model_defaults_while_writing_other_settings

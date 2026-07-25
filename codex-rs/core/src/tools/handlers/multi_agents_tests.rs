@@ -420,7 +420,7 @@ async fn multi_agent_v2_spawn_rejects_child_model_from_different_backend() {
     assert_eq!(
         err,
         FunctionCallError::RespondToModel(
-            "Unknown model `gpt-5.4` for spawn_agent. Available models: gpt-5.6-sol, gpt-5.6-terra"
+            "Unknown model `gpt-5.4` for spawn_agent. There are 2 eligible picker models. Bounded sample (not exhaustive): gpt-5.6-sol, gpt-5.6-terra. Use an exact `/model` or `sudhir-codex models` ID."
                 .to_string()
         )
     );
@@ -1157,8 +1157,8 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
                     if communication.author == AgentPath::root()
                         && communication.recipient.as_str() == "/root/test_process"
                         && communication.other_recipients.is_empty()
-                        && communication.content.is_empty()
-                        && communication.encrypted_content.as_deref() == Some("encrypted-spawn-message")
+                        && communication.content == "encrypted-spawn-message"
+                        && communication.encrypted_content.is_none()
                         && communication.trigger_turn
             )
     }));
@@ -1184,8 +1184,8 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
                     if communication.author == AgentPath::root()
                         && communication.recipient.as_str() == "/root/test_process"
                         && communication.other_recipients.is_empty()
-                        && communication.content.is_empty()
-                        && communication.encrypted_content.as_deref() == Some("encrypted-send-message")
+                        && communication.content == "encrypted-send-message"
+                        && communication.encrypted_content.is_none()
                         && !communication.trigger_turn
             )
     }));
@@ -1380,8 +1380,8 @@ async fn multi_agent_v2_send_message_accepts_root_target_from_child() {
                     if communication.author == child_path
                         && communication.recipient == AgentPath::root()
                         && communication.other_recipients.is_empty()
-                        && communication.content.is_empty()
-                        && communication.encrypted_content.as_deref() == Some("encrypted-done")
+                        && communication.content == "encrypted-done"
+                        && communication.encrypted_content.is_none()
                         && !communication.trigger_turn
             )
     }));
@@ -1894,8 +1894,8 @@ async fn multi_agent_v2_send_message_rejects_interrupt_parameter() {
             if communication.author == AgentPath::root()
                 && communication.recipient.as_str() == "/root/worker"
                 && communication.other_recipients.is_empty()
-                && communication.content.is_empty()
-                && communication.encrypted_content.as_deref() == Some("continue")
+                && communication.content == "continue"
+                && communication.encrypted_content.is_none()
                 && !communication.trigger_turn
     )));
 }
@@ -1980,7 +1980,8 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
                 Op::InterAgentCommunication { communication }
                     if communication.author == AgentPath::root()
                         && communication.recipient == worker_path
-                        && communication.encrypted_content.as_deref() == Some("continue")
+                        && communication.content == "continue"
+                        && communication.encrypted_content.is_none()
                         && communication.trigger_turn
             )
     }));

@@ -40,6 +40,7 @@ use owo_colors::OwoColorize;
 use std::collections::HashSet;
 use std::io::IsTerminal;
 use std::io::Write;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use supports_color::Stream;
@@ -954,11 +955,53 @@ fn stage_str(stage: Stage) -> &'static str {
 }
 
 fn main() -> anyhow::Result<()> {
+    enforce_sudhir_codex_home_isolation()?;
     let remote_control_disabled = codex_app_server::take_remote_control_disabled_env();
     arg0_dispatch_or_else(move |arg0_paths: Arg0DispatchPaths| async move {
         cli_main(arg0_paths, remote_control_disabled).await?;
         Ok(())
     })
+}
+
+fn enforce_sudhir_codex_home_isolation() -> anyhow::Result<()> {
+    let codex_home = std::env::var_os("CODEX_HOME").ok_or_else(|| {
+        anyhow::anyhow!(
+            "Sudhir-Codex requires an explicit private CODEX_HOME; use the sudhir-codex launcher"
+        )
+    })?;
+    let user_home = std::env::var_os("HOME")
+        .ok_or_else(|| anyhow::anyhow!("Sudhir-Codex requires HOME to verify state isolation"))?;
+    validate_sudhir_codex_home_paths(Path::new(&codex_home), Path::new(&user_home).join(".codex"))
+}
+
+fn validate_sudhir_codex_home_paths(
+    codex_home: &Path,
+    official_codex_home: PathBuf,
+) -> anyhow::Result<()> {
+    if !codex_home.is_absolute() {
+        anyhow::bail!("Sudhir-Codex CODEX_HOME must be an absolute path");
+    }
+    let metadata = std::fs::symlink_metadata(codex_home).map_err(|err| {
+        anyhow::anyhow!(
+            "Sudhir-Codex private CODEX_HOME must already exist and be a directory: {err}"
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        anyhow::bail!("Sudhir-Codex CODEX_HOME must be a real directory, not a symlink");
+    }
+    let private_home = std::fs::canonicalize(codex_home)?;
+    let official_home =
+        std::fs::canonicalize(&official_codex_home).unwrap_or_else(|_| official_codex_home.clone());
+    if private_home == official_home
+        || private_home.starts_with(&official_home)
+        || official_home.starts_with(&private_home)
+    {
+        anyhow::bail!(
+            "Sudhir-Codex refuses to use or overlap the official Codex home {}",
+            official_home.display()
+        );
+    }
+    Ok(())
 }
 
 async fn cli_main(
@@ -2552,6 +2595,46 @@ mod tests {
     use codex_protocol::ThreadId;
     use codex_tui::TokenUsage;
     use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
+
+    #[test]
+    fn sudhir_codex_home_accepts_independent_directory() {
+        let fixture = TempDir::new().expect("temp dir");
+        let official = fixture.path().join(".codex");
+        let private = fixture.path().join(".sudhir-codex");
+        std::fs::create_dir(&official).expect("official dir");
+        std::fs::create_dir(&private).expect("private dir");
+
+        validate_sudhir_codex_home_paths(&private, official)
+            .expect("independent private home should be accepted");
+    }
+
+    #[test]
+    fn sudhir_codex_home_rejects_official_directory() {
+        let fixture = TempDir::new().expect("temp dir");
+        let official = fixture.path().join(".codex");
+        std::fs::create_dir(&official).expect("official dir");
+
+        let err = validate_sudhir_codex_home_paths(&official, official.clone())
+            .expect_err("official home should be rejected");
+        assert!(err.to_string().contains("official Codex home"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sudhir_codex_home_rejects_symlink() {
+        let fixture = TempDir::new().expect("temp dir");
+        let official = fixture.path().join(".codex");
+        let private = fixture.path().join(".sudhir-codex");
+        let linked = fixture.path().join("linked-home");
+        std::fs::create_dir(&official).expect("official dir");
+        std::fs::create_dir(&private).expect("private dir");
+        std::os::unix::fs::symlink(&private, &linked).expect("symlink");
+
+        let err = validate_sudhir_codex_home_paths(&linked, official)
+            .expect_err("symlinked home should be rejected");
+        assert!(err.to_string().contains("not a symlink"));
+    }
 
     #[tokio::test]
     async fn updater_http_client_factory_honors_respect_system_proxy() {

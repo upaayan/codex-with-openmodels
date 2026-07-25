@@ -29,6 +29,21 @@ pub(crate) const MIN_WAIT_TIMEOUT_MS: i64 = DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIME
 pub(crate) const DEFAULT_WAIT_TIMEOUT_MS: i64 = 30_000;
 pub(crate) const MAX_WAIT_TIMEOUT_MS: i64 = HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS;
 pub(crate) const MAX_SPAWN_AGENT_MODEL_OVERRIDES: usize = 5;
+pub(crate) const MAX_SPAWN_AGENT_MODEL_TEXT_BYTES: usize = 3_000;
+
+pub(crate) fn truncate_spawn_agent_model_text(mut text: String) -> String {
+    if text.len() <= MAX_SPAWN_AGENT_MODEL_TEXT_BYTES {
+        return text;
+    }
+    let suffix = "…";
+    let mut end = MAX_SPAWN_AGENT_MODEL_TEXT_BYTES.saturating_sub(suffix.len());
+    while !text.is_char_boundary(end) {
+        end = end.saturating_sub(1);
+    }
+    text.truncate(end);
+    text.push_str(suffix);
+    text
+}
 
 pub(crate) fn model_supports_multi_agent_backend(
     model: &ModelPreset,
@@ -394,7 +409,7 @@ pub(crate) async fn apply_spawn_agent_role(
     )
 }
 
-fn find_spawn_agent_model_name(
+pub(super) fn find_spawn_agent_model_name(
     available_models: &[ModelPreset],
     requested_model: &str,
     multi_agent_version: MultiAgentVersion,
@@ -407,17 +422,21 @@ fn find_spawn_agent_model_name(
         })
         .map(|model| model.model.clone())
         .ok_or_else(|| {
-            let available = available_models
+            let eligible_models = available_models
                 .iter()
                 .filter(|model| model.show_in_picker)
                 .filter(|model| model_supports_multi_agent_backend(model, multi_agent_version))
+                .collect::<Vec<_>>();
+            let eligible_count = eligible_models.len();
+            let sample = eligible_models
+                .into_iter()
                 .take(MAX_SPAWN_AGENT_MODEL_OVERRIDES)
                 .map(|model| model.model.as_str())
                 .collect::<Vec<_>>()
                 .join(", ");
-            FunctionCallError::RespondToModel(format!(
-                "Unknown model `{requested_model}` for spawn_agent. Available models: {available}"
-            ))
+            FunctionCallError::RespondToModel(truncate_spawn_agent_model_text(format!(
+                "Unknown model `{requested_model}` for spawn_agent. There are {eligible_count} eligible picker models. Bounded sample (not exhaustive): {sample}. Use an exact `/model` or `sudhir-codex models` ID."
+            )))
         })
 }
 

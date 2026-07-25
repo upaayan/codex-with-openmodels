@@ -1,4 +1,6 @@
 use super::*;
+use crate::tools::handlers::multi_agents_common::MAX_SPAWN_AGENT_MODEL_TEXT_BYTES;
+use crate::tools::handlers::multi_agents_common::find_spawn_agent_model_name;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -78,7 +80,7 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
     assert!(description.contains(SPAWN_AGENT_INHERITED_MODEL_GUIDANCE));
     assert!(
         description
-            .contains("Available model overrides (optional; inherited parent model is preferred):")
+            .contains("Example model overrides (not exhaustive; any exact picker or `sudhir-codex models` ID is accepted):")
     );
     assert!(description.contains(
         "- `visible-model`: visible description Reasoning efforts: medium (default). Service tiers: priority."
@@ -91,7 +93,7 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
         properties
             .get("message")
             .and_then(|schema| schema.encrypted),
-        Some(true)
+        None
     );
     assert!(properties.contains_key("fork_turns"));
     assert!(!properties.contains_key("items"));
@@ -212,6 +214,32 @@ fn spawn_agent_tool_caps_visible_model_summaries() {
         );
     }
     assert!(!description.contains("`sixth-model`"));
+    assert!(description.len() <= MAX_SPAWN_AGENT_MODEL_TEXT_BYTES);
+    assert!(description.contains("not exhaustive"));
+}
+
+#[test]
+fn spawn_agent_accepts_exact_model_beyond_visible_summary_cap() {
+    let models = ["first", "second", "third", "fourth", "fifth", "sixth"]
+        .into_iter()
+        .map(|id| model_preset(id, /*show_in_picker*/ true))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        find_spawn_agent_model_name(&models, "sixth-model", MultiAgentVersion::V2)
+            .expect("exact catalog model after bounded sample should be accepted"),
+        "sixth-model"
+    );
+}
+
+#[test]
+fn spawn_agent_model_summary_has_hard_utf8_byte_cap() {
+    let mut model = model_preset("large", /*show_in_picker*/ true);
+    model.description = "é".repeat(MAX_SPAWN_AGENT_MODEL_TEXT_BYTES);
+
+    let description = spawn_agent_models_description(&[model], MultiAgentVersion::V2);
+    assert!(description.len() <= MAX_SPAWN_AGENT_MODEL_TEXT_BYTES);
+    assert!(description.ends_with('…'));
 }
 
 #[test]
@@ -229,7 +257,7 @@ fn spawn_agent_tool_caps_reasoning_effort_value_length() {
     assert_eq!(
         spawn_agent_models_description(&[model], MultiAgentVersion::V2),
         format!(
-            "Available model overrides (optional; inherited parent model is preferred):\n- `visible-model`: visible description Reasoning efforts: {} (default). Service tiers: priority.",
+            "Example model overrides (not exhaustive; any exact picker or `sudhir-codex models` ID is accepted):\n- `visible-model`: visible description Reasoning efforts: {} (default). Service tiers: priority.",
             "é".repeat(MAX_REASONING_EFFORT_CHARS_IN_SPAWN_AGENT_DESCRIPTION)
         )
     );
@@ -265,7 +293,7 @@ fn spawn_agent_tool_keeps_model_controls_when_spawn_metadata_is_hidden() {
     assert!(properties.contains_key("reasoning_effort"));
     assert!(!properties.contains_key("service_tier"));
     assert!(!description.contains(SPAWN_AGENT_INHERITED_MODEL_GUIDANCE));
-    assert!(description.contains("Available model overrides"));
+    assert!(description.contains("Example model overrides"));
 }
 
 #[test]
@@ -324,7 +352,7 @@ fn send_message_tool_requires_message_and_has_no_output_schema() {
         properties
             .get("message")
             .and_then(|schema| schema.encrypted),
-        Some(true)
+        None
     );
     assert!(!properties.contains_key("interrupt"));
     assert!(!properties.contains_key("items"));
@@ -372,7 +400,7 @@ fn followup_task_tool_requires_message_and_has_no_output_schema() {
         properties
             .get("message")
             .and_then(|schema| schema.encrypted),
-        Some(true)
+        None
     );
     assert!(!properties.contains_key("items"));
     assert_eq!(

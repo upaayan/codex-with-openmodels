@@ -134,7 +134,7 @@ impl ConfigRequestProcessor {
 
     pub(crate) async fn batch_write(
         &self,
-        params: ConfigBatchWriteParams,
+        mut params: ConfigBatchWriteParams,
     ) -> Result<ClientResponsePayload, JSONRPCErrorError> {
         let session_defaults_only = !params.edits.is_empty()
             && params.edits.iter().all(|edit| {
@@ -147,6 +147,13 @@ impl ConfigRequestProcessor {
                         | "personality"
                 )
             });
+        // Sudhir-Codex treats picker changes as session settings. The desktop
+        // client sends these two edits after every picker change, so discard
+        // them here while preserving unrelated batch edits and the explicit
+        // config/value/write API for deliberate default changes.
+        params
+            .edits
+            .retain(|edit| !matches!(edit.key_path.as_str(), "model" | "model_reasoning_effort"));
         let reload_user_config = params.reload_user_config;
         let response = self.batch_write_inner(params).await?;
         if !session_defaults_only {
