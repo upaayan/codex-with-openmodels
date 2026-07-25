@@ -181,8 +181,8 @@ def _start_gateway_locked(
                 f"Gateway exited during startup; inspect {paths.gateway_log}",
             )
         status = gateway_status(paths)
-        if status["running"] and status["pid"] == process.pid:
-            return process.pid
+        if status["running"] and (is_windows() or status["pid"] == process.pid):
+            return int(status["pid"])
         time.sleep(0.1)
     process.terminate()
     raise GatewayError(
