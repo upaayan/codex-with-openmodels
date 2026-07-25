@@ -171,7 +171,8 @@ $PythonCommand = Get-Command $Python -CommandType Application -ErrorAction Stop 
 & $PythonCommand.Source -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)"
 Assert-NativeSuccess -Description "Python 3.11+ requirement check"
 
-$NodeCommand = Get-Command "node.exe" -CommandType Application -ErrorAction Stop
+$NodeCommand = Get-Command "node.exe" -CommandType Application -ErrorAction Stop |
+    Select-Object -First 1
 $NodeVersion = (& $NodeCommand.Source -p "process.versions.node").Trim()
 Assert-NativeSuccess -Description "Node.js version check"
 $NodeParts = @($NodeVersion.Split(".") | ForEach-Object { [int]$_ })
@@ -182,7 +183,8 @@ if (
 ) {
     throw "Cursor models require Node.js 22.13 or newer; found $NodeVersion"
 }
-$NpmCommand = Get-Command $Npm -CommandType Application -ErrorAction Stop
+$NpmCommand = Get-Command $Npm -CommandType Application -ErrorAction Stop |
+    Select-Object -First 1
 
 $TemporaryRoot = Join-Path (
     [System.IO.Path]::GetTempPath()
