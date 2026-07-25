@@ -358,6 +358,9 @@ X-Test = "value"
                 ],
             ),
             mock.patch("sudhir_codex_gateway.management.subprocess.Popen") as popen,
+            mock.patch(
+                "sudhir_codex_gateway.platform_support._restrict_windows_acl"
+            ),
         ):
             process = popen.return_value
             process.pid = 4321

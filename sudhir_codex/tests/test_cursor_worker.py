@@ -62,9 +62,10 @@ class CursorWorkerClientTests(unittest.TestCase):
         finally:
             client.close()
 
-        self.assertEqual(
-            result.text,
-            f"cursor/composer-2.5-fast:hello:{self.workspace.resolve()}",
+        prefix = "cursor/composer-2.5-fast:hello:"
+        self.assertTrue(result.text.startswith(prefix))
+        self.assertTrue(
+            os.path.samefile(result.text.removeprefix(prefix), self.workspace),
         )
         self.assertEqual(result.input_tokens, 7)
         self.assertEqual(result.output_tokens, 3)
@@ -100,12 +101,10 @@ class CursorWorkerClientTests(unittest.TestCase):
             client.close()
 
         for workspace, result in zip(workspaces, results, strict=True):
-            self.assertEqual(
-                result,
-                (
-                    "cursor/composer-latest-fast:"
-                    f"{workspace.name}:{workspace.resolve()}"
-                ),
+            prefix = f"cursor/composer-latest-fast:{workspace.name}:"
+            self.assertTrue(result.startswith(prefix))
+            self.assertTrue(
+                os.path.samefile(result.removeprefix(prefix), workspace),
             )
 
     def test_configured_node_binary_precedes_path_lookup(self) -> None:
