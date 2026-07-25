@@ -370,6 +370,54 @@ X-Test = "value"
 
         self.assert_private_access(self.paths.start_lock_file, 0o600)
 
+    def test_windows_gateway_start_accepts_authenticated_child_pid(self) -> None:
+        python = self.paths.venv_python
+        python.parent.mkdir(parents=True)
+        python.touch()
+        initial = {
+            "running": False,
+            "pid": None,
+            "process_alive": False,
+            "health": None,
+        }
+        winner = {
+            "running": True,
+            "pid": 4322,
+            "process_alive": True,
+            "health": {
+                "service": "sudhir-codex-gateway",
+                "instance_id": "private-instance",
+                "pid": 4322,
+            },
+        }
+        with (
+            mock.patch(
+                "sudhir_codex_gateway.management.gateway_status",
+                side_effect=[initial, winner],
+            ),
+            mock.patch("sudhir_codex_gateway.management.subprocess.Popen") as popen,
+            mock.patch(
+                "sudhir_codex_gateway.platform_support._restrict_windows_acl"
+            ),
+            mock.patch(
+                "sudhir_codex_gateway.management.is_windows",
+                return_value=True,
+            ),
+            mock.patch(
+                "sudhir_codex_gateway.management.time.monotonic",
+                side_effect=[0.0, 0.0, 1.0],
+            ),
+            mock.patch("sudhir_codex_gateway.management.time.sleep"),
+        ):
+            process = popen.return_value
+            process.pid = 4321
+            process.poll.return_value = None
+
+            self.assertEqual(
+                start_gateway(self.paths, timeout_seconds=1.0),
+                4322,
+            )
+
     def test_gateway_start_timeout_reports_last_health_state(self) -> None:
         python = self.paths.venv_python
         python.parent.mkdir(parents=True)
