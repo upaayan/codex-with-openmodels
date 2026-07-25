@@ -193,6 +193,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # setup-python is needed only by the rusty_v8 verifier. Do not expose
+          # its host-library override to the native MUSL runtime smoke.
+          unset LD_LIBRARY_PATH
           stage="${RUNNER_TEMP}/openmodels-linux"
           release="target/x86_64-unknown-linux-musl/release"
           rm -rf "$stage"
