@@ -230,8 +230,8 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-  windows:
-    name: Windows x64 bundle
+  windows-build:
+    name: Windows x64 build (${{ matrix.bundle }})
     needs: tag-check
     runs-on: windows-2022
     timeout-minutes: 90
@@ -240,6 +240,16 @@ jobs:
         working-directory: codex-rs
     env:
       LIBSQLITE3_FLAGS: SQLITE_DISABLE_INTRINSIC
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - bundle: primary
+            binaries: codex codex-code-mode-host codex-responses-api-proxy
+          - bundle: helpers
+            binaries: codex-windows-sandbox-setup codex-command-runner
+          - bundle: app-server
+            binaries: codex-app-server
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -263,30 +273,75 @@ jobs:
         with:
           target: x86_64-pc-windows-msvc
 
-      - name: Build required Windows binaries
+      - name: Build Windows binary group
         shell: bash
+        env:
+          WINDOWS_BINARIES: ${{ matrix.binaries }}
         run: |
           set -euo pipefail
+          build_args=()
+          for binary in $WINDOWS_BINARIES; do
+            build_args+=(--bin "$binary")
+          done
           cargo build \
             --locked \
             --target x86_64-pc-windows-msvc \
             --release \
-            --bin codex \
-            --bin codex-code-mode-host \
-            --bin codex-responses-api-proxy \
-            --bin codex-app-server \
-            --bin codex-windows-sandbox-setup \
-            --bin codex-command-runner
+            "${build_args[@]}"
 
-      - name: Stage and smoke-test native Windows binaries
+      - name: Stage and inspect Windows binary group
         shell: pwsh
+        env:
+          WINDOWS_BINARIES: ${{ matrix.binaries }}
+          WINDOWS_BUNDLE: ${{ matrix.bundle }}
         run: |
           $Target = "x86_64-pc-windows-msvc"
           $Release = Join-Path $env:CARGO_TARGET_DIR "$Target\release"
-          $Stage = Join-Path $env:RUNNER_TEMP "openmodels-windows"
-          $env:CODEX_HOME = Join-Path $env:RUNNER_TEMP "openmodels-codex-home"
-          New-Item -ItemType Directory -Path $env:CODEX_HOME -Force | Out-Null
+          $Stage = Join-Path $env:RUNNER_TEMP "openmodels-windows-$env:WINDOWS_BUNDLE"
           New-Item -ItemType Directory -Path $Stage -Force | Out-Null
+          $Binaries = @($env:WINDOWS_BINARIES -split "\s+" | Where-Object { $_ })
+          foreach ($Binary in $Binaries) {
+            $Executable = "$Binary.exe"
+            $Source = Join-Path $Release $Executable
+            if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) {
+              throw "Missing runtime binary $Source"
+            }
+            $Headers = & dumpbin.exe /headers $Source
+            if (($Headers -join "`n") -notmatch "8664 machine \(x64\)") {
+              throw "$Executable is not an x64 PE binary"
+            }
+            Copy-Item -LiteralPath $Source -Destination (Join-Path $Stage $Executable)
+          }
+
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: windows-release-binaries-${{ matrix.bundle }}
+          path: ${{ runner.temp }}/openmodels-windows-${{ matrix.bundle }}/*.exe
+          if-no-files-found: error
+          retention-days: 3
+
+  windows:
+    name: Windows x64 bundle
+    needs:
+      - tag-check
+      - windows-build
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: windows-release-binaries-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/openmodels-windows
+
+      - name: Smoke-test and package native Windows binaries
+        shell: pwsh
+        run: |
+          $Stage = Join-Path $env:RUNNER_TEMP "openmodels-windows"
           $Binaries = @(
             "codex.exe",
             "codex-app-server.exe",
@@ -294,18 +349,22 @@ jobs:
             "codex-command-runner.exe",
             "codex-responses-api-proxy.exe",
             "codex-windows-sandbox-setup.exe"
+          ) | Sort-Object
+          $Actual = @(
+            Get-ChildItem -LiteralPath $Stage -File |
+              ForEach-Object { $_.Name } |
+              Sort-Object
           )
-          foreach ($Binary in $Binaries) {
-            $Source = Join-Path $Release $Binary
-            if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) {
-              throw "Missing runtime binary $Source"
-            }
-            Copy-Item -LiteralPath $Source -Destination (Join-Path $Stage $Binary)
-            $Headers = & dumpbin.exe /headers $Source
-            if (($Headers -join "`n") -notmatch "8664 machine \(x64\)") {
-              throw "$Binary is not an x64 PE binary"
-            }
+          $Difference = Compare-Object `
+            -ReferenceObject $Binaries `
+            -DifferenceObject $Actual
+          if ($null -ne $Difference) {
+            $Difference | Format-Table | Out-String | Write-Host
+            throw "Assembled Windows binaries do not match the release layout"
           }
+
+          $env:CODEX_HOME = Join-Path $env:RUNNER_TEMP "openmodels-codex-home"
+          New-Item -ItemType Directory -Path $env:CODEX_HOME -Force | Out-Null
           & (Join-Path $Stage "codex.exe") --version
           if ($LASTEXITCODE -ne 0) { throw "codex.exe --version failed" }
           & (Join-Path $Stage "codex.exe") --help | Out-Null
