@@ -134,6 +134,10 @@ jobs:
           python -m unittest discover -s sudhir_codex/tests -v
           ruff check sudhir_codex/src sudhir_codex/tests
 
+      - name: Test the Windows Pi model setup script
+        shell: pwsh
+        run: .\scripts\tests\setup-pi-models.tests.ps1
+
       - name: Check the pinned Windows Cursor worker
         working-directory: sudhir_codex/cursor_worker
         shell: pwsh

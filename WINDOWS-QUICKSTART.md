@@ -174,5 +174,62 @@ Close PowerShell, open a new ordinary PowerShell window, and verify:
 aws --version
 ```
 
-Pi model-setup commands will be added here after the AWS authentication method
-is confirmed.
+## Install all Pi models and credentials from AWS
+
+First verify that this machine is using the intended AWS identity:
+
+```powershell
+aws sts get-caller-identity --no-cli-pager
+```
+
+From the Codex with Open Models repository, download the Pi installer and the
+xAI OAuth gateway support:
+
+```powershell
+Set-Location (Join-Path $env:USERPROFILE 'src\codex-with-openmodels')
+git fetch origin main --depth 1
+git restore --source=FETCH_HEAD -- `
+  scripts/setup-pi-models.ps1 `
+  sudhir_codex/src/sudhir_codex_gateway/credentials.py
+```
+
+Restore the current Pi catalog and credentials from AWS Secrets Manager:
+
+```powershell
+.\scripts\setup-pi-models.ps1
+```
+
+The script:
+
+- reads `auth.json` and `models.json` from the configured AWS account;
+- backs up existing Pi files before replacing them;
+- validates both JSON files;
+- restricts them to the current Windows user;
+- prints model counts but never credential values.
+
+The current owner catalog contains 77 entries across 11 providers. Three
+`openai-codex` entries are represented by the normal GPT subscription routes,
+so `sudhir-codex doctor` reports 74 open-model routes across 10 providers.
+
+Restart the gateway so it loads the xAI OAuth support:
+
+```powershell
+sudhir-codex gateway stop
+sudhir-codex gateway start
+sudhir-codex doctor
+sudhir-codex models
+```
+
+Both xAI routes are available:
+
+```text
+pi-xai/grok-4.5
+pi-xai/grok-4.3
+```
+
+They use the Pi xAI OAuth credential. The separate `pi-xai-api/*` routes use
+the xAI API key.
+
+The 12 `pi-backup-llama/*` entries are also preserved because the full catalog
+was requested, but their local tunnel command is Mac-specific and is not
+expected to run on Windows.
