@@ -160,5 +160,19 @@ If installed, the first command prints a line beginning with `aws-cli/2` and
 the second shows the executable's location. If PowerShell says `aws` is not
 recognized, AWS CLI is not installed or is not on the PATH.
 
-AWS and Pi model-setup commands will be added here after the local AWS status
-and authentication method are confirmed.
+## Install AWS CLI
+
+Open PowerShell **as Administrator** and run:
+
+```powershell
+winget install --exact --id Amazon.AWSCLI
+```
+
+Close PowerShell, open a new ordinary PowerShell window, and verify:
+
+```powershell
+aws --version
+```
+
+Pi model-setup commands will be added here after the AWS authentication method
+is confirmed.
