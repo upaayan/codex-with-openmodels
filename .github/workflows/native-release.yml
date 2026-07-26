@@ -116,9 +116,11 @@ jobs:
           retention-days: 3
 
   ubuntu:
-    name: Ubuntu 22.04 x64 MUSL bundle
+    name: Ubuntu 22.04-compatible x64 MUSL bundle
     needs: tag-check
-    runs-on: ubuntu-22.04
+    # Match OpenAI's MUSL 1.2.4 release toolchain. The resulting static binary
+    # does not depend on the build host and is tested later on Ubuntu 22.04.
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     defaults:
       run:
@@ -220,6 +222,10 @@ jobs:
             readelf -l "$binary"
             readelf -d "$binary" || true
             ldd "$binary" || true
+            if readelf -l "$binary" | grep -q 'INTERP'; then
+              echo "${label} Linux binary is not self-contained" >&2
+              return 1
+            fi
 
             set +e
             "$binary" --version
