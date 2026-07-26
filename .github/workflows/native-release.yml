@@ -155,6 +155,12 @@ jobs:
           TARGET: x86_64-unknown-linux-musl
         run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
 
+      - name: Install Linux crash diagnostics
+        run: |
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            --no-install-recommends gdb strace
+
       - name: Disable aws-lc jitter entropy
         shell: bash
         run: |
@@ -204,6 +210,36 @@ jobs:
           mkdir -p "$CODEX_HOME"
           rm -rf "$stage"
           mkdir -p "$stage/codex-resources"
+
+          run_codex_smoke() {
+            label="$1"
+            binary="$2"
+            echo "Testing ${label} Linux binary: ${binary}"
+            file "$binary"
+            readelf -h "$binary"
+            readelf -l "$binary"
+            readelf -d "$binary" || true
+            ldd "$binary" || true
+
+            set +e
+            "$binary" --version
+            status=$?
+            set -e
+            if [[ "$status" -ne 0 ]]; then
+              echo "${label} Linux binary exited with status ${status}" >&2
+              gdb -q -batch \
+                -ex "set pagination off" \
+                -ex run \
+                -ex "thread apply all bt" \
+                --args "$binary" --version || true
+              trace="${RUNNER_TEMP}/codex-${label}.strace"
+              strace -f -o "$trace" "$binary" --version || true
+              tail -n 120 "$trace" || true
+              return "$status"
+            fi
+          }
+
+          run_codex_smoke unstripped "$release/codex"
           for binary in codex codex-code-mode-host codex-responses-api-proxy; do
             cp "$release/$binary" "$stage/$binary"
             strip --strip-debug --strip-unneeded "$stage/$binary"
@@ -211,7 +247,7 @@ jobs:
           done
           cp "$release/bwrap" "$stage/codex-resources/bwrap"
           file "$stage/codex-resources/bwrap" | grep -Eq 'x86-64|x86_64'
-          "$stage/codex" --version
+          run_codex_smoke stripped "$stage/codex"
           "$stage/codex" --help >/dev/null
           "$stage/codex" app-server --help >/dev/null
           "$stage/codex" mcp-server --help >/dev/null
