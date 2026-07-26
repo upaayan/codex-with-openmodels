@@ -3,6 +3,7 @@
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 from .app import GATEWAY_TOKEN_HEADER
 from .errors import GatewayError
@@ -56,6 +57,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         forced = _forced_config(paths.gateway_url)
         if is_windows():
+            environment.setdefault(
+                "HOME",
+                os.environ.get("USERPROFILE") or str(Path.home()),
+            )
             try:
                 completed = subprocess.run(
                     [str(paths.core_binary), *forced, *argv],

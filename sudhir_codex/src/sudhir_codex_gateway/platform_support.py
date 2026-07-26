@@ -94,7 +94,7 @@ def detached_process_kwargs() -> dict[str, Any]:
     if WINDOWS:
         return {
             "creationflags": (
-                subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+                subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
             )
         }
     return {"start_new_session": True}

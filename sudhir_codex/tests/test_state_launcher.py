@@ -338,6 +338,47 @@ X-Test = "value"
             "private-token",
         )
 
+    def test_windows_launcher_supplies_home_to_core_when_missing(self) -> None:
+        windows_home = self.root / "windows-home"
+        with (
+            mock.patch("sudhir_codex_gateway.platform_support.WINDOWS", True),
+            mock.patch.dict(
+                os.environ,
+                {"USERPROFILE": str(windows_home)},
+                clear=True,
+            ),
+        ):
+            windows_core = self.paths.core_binary
+            windows_core.parent.mkdir(parents=True)
+            windows_core.touch()
+            with (
+                mock.patch(
+                    "sudhir_codex_gateway.launcher.runtime_paths_from_env",
+                    return_value=self.paths,
+                ),
+                mock.patch(
+                    "sudhir_codex_gateway.launcher.ensure_private_state",
+                    return_value="private-token",
+                ),
+                mock.patch("sudhir_codex_gateway.launcher.start_gateway"),
+                mock.patch(
+                    "sudhir_codex_gateway.launcher.is_windows",
+                    return_value=True,
+                ),
+                mock.patch(
+                    "sudhir_codex_gateway.launcher.subprocess.run"
+                ) as run_core,
+            ):
+                run_core.return_value.returncode = 0
+
+                result = launcher_main(["--version"])
+
+        self.assertEqual(result, 0)
+        self.assertEqual(
+            run_core.call_args.kwargs["env"].get("HOME"),
+            str(windows_home),
+        )
+
     def test_gateway_start_is_serialized_by_private_lock(self) -> None:
         python = self.paths.venv_python
         python.parent.mkdir(parents=True)
