@@ -399,7 +399,9 @@ jobs:
             throw "Assembled Windows binaries do not match the release layout"
           }
 
+          $env:HOME = Join-Path $env:RUNNER_TEMP "openmodels-user-home"
           $env:CODEX_HOME = Join-Path $env:RUNNER_TEMP "openmodels-codex-home"
+          New-Item -ItemType Directory -Path $env:HOME -Force | Out-Null
           New-Item -ItemType Directory -Path $env:CODEX_HOME -Force | Out-Null
           & (Join-Path $Stage "codex.exe") --version
           if ($LASTEXITCODE -ne 0) { throw "codex.exe --version failed" }
