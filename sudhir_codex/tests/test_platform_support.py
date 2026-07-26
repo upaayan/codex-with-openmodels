@@ -151,7 +151,7 @@ class PlatformSupportTests(unittest.TestCase):
             ],
         )
 
-    def test_windows_detached_process_flags_are_explicit(self) -> None:
+    def test_windows_detached_process_starts_without_a_console(self) -> None:
         with (
             mock.patch.object(platform_support, "WINDOWS", True),
             mock.patch(
@@ -165,12 +165,17 @@ class PlatformSupportTests(unittest.TestCase):
                 0x00000008,
                 create=True,
             ),
+            mock.patch(
+                "sudhir_codex_gateway.platform_support.subprocess.CREATE_NO_WINDOW",
+                0x08000000,
+                create=True,
+            ),
         ):
             flags = platform_support.detached_process_kwargs()
 
         self.assertEqual(
             flags,
-            {"creationflags": 0x00000208},
+            {"creationflags": 0x08000200},
         )
 
     @unittest.skipUnless(os.name == "nt", "native Windows process test")
