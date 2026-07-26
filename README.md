@@ -81,6 +81,9 @@ See [sudhir_codex/README.md](sudhir_codex/README.md) for the Unix source and
 prebuilt installer modes, Windows prebuilt installer, model IDs, gateway
 commands, and rollback notes.
 
+For copy-friendly native Windows commands, see
+[WINDOWS-QUICKSTART.md](WINDOWS-QUICKSTART.md).
+
 The launch command is deliberately named `sudhir-codex`. Installation never
 creates or replaces a command named `codex`.
 
