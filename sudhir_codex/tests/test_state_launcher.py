@@ -62,6 +62,8 @@ class StateAndLauncherTests(unittest.TestCase):
         self.assertIn('tool_namespace = "sudhir_agents"', config)
         self.assertIn("enable_request_compression = false", config)
         self.assertIn('exporter = "none"', config)
+        self.assertNotIn("request_max_retries", config)
+        self.assertNotIn("stream_max_retries", config)
         self.assertIn(
             'SUDHIR_CODEX_GATEWAY_TOKEN = "exclude"',
             config,
@@ -274,6 +276,8 @@ X-Test = "value"
         self.assertIn('otel.exporter="none"', joined)
         self.assertIn("features.enable_request_compression=false", joined)
         self.assertIn("agents.max_concurrent_threads_per_session=6", joined)
+        self.assertNotIn("request_max_retries", joined)
+        self.assertNotIn("stream_max_retries", joined)
         self.assertIn(
             'features.multi_agent_v2.tool_namespace="sudhir_agents"',
             joined,

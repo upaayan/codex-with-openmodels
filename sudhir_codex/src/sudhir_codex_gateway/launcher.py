@@ -173,8 +173,7 @@ def _forced_config(gateway_url: str) -> list[str]:
         '{ name = "Sudhir Gateway", '
         f'base_url = "{gateway_url}/v1", '
         'wire_api = "responses", requires_openai_auth = true, '
-        "supports_websockets = false, request_max_retries = 0, "
-        "stream_max_retries = 0, "
+        "supports_websockets = false, "
         'env_http_headers = { "'
         + GATEWAY_TOKEN_HEADER
         + '" = "SUDHIR_CODEX_GATEWAY_TOKEN" } }'

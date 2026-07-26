@@ -313,8 +313,6 @@ base_url = "{paths.gateway_url}/v1"
 wire_api = "responses"
 requires_openai_auth = true
 supports_websockets = false
-request_max_retries = 0
-stream_max_retries = 0
 
 [model_providers.sudhir_gateway.env_http_headers]
 "{GATEWAY_TOKEN_HEADER}" = "SUDHIR_CODEX_GATEWAY_TOKEN"
