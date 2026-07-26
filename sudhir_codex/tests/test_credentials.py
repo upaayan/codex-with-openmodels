@@ -1,8 +1,11 @@
+import json
 import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+
+import httpx
 
 from helpers import basic_pi_document
 from helpers import make_repo
@@ -33,6 +36,22 @@ class CredentialTests(unittest.TestCase):
             .models[0]
         )
 
+    def xai_model(self):
+        return self.model(
+            {
+                "providers": {
+                    "xai": {
+                        "models": [
+                            {
+                                "id": "grok-4.5",
+                                "reasoning": True,
+                            }
+                        ]
+                    }
+                }
+            }
+        )
+
     def test_auth_file_api_key_is_used(self) -> None:
         write_json(
             self.pi_dir / "auth.json",
@@ -44,6 +63,100 @@ class CredentialTests(unittest.TestCase):
         )
 
         self.assertEqual(headers, {"Authorization": "Bearer pi-secret"})
+
+    def test_current_xai_oauth_access_token_is_used(self) -> None:
+        write_json(
+            self.pi_dir / "auth.json",
+            {
+                "xai": {
+                    "type": "oauth",
+                    "access": "xai-access",
+                    "refresh": "xai-refresh",
+                    "expires": 9_999_999_999_999,
+                }
+            },
+        )
+
+        with patch("httpx.post") as post:
+            try:
+                headers = CredentialResolver(
+                    self.pi_dir / "auth.json"
+                ).authorization_headers(self.xai_model())
+            except GatewayError as exc:
+                self.fail(f"xAI OAuth access token was rejected: {exc}")
+
+        self.assertEqual(headers, {"Authorization": "Bearer xai-access"})
+        post.assert_not_called()
+
+    def test_expired_xai_oauth_token_is_refreshed_and_saved_atomically(self) -> None:
+        auth_path = self.pi_dir / "auth.json"
+        write_json(
+            auth_path,
+            {
+                "xai": {
+                    "type": "oauth",
+                    "access": "expired-access",
+                    "refresh": "existing-refresh",
+                    "expires": 1,
+                },
+                "other": {"type": "api_key", "key": "other-secret"},
+            },
+        )
+        refresh_response = httpx.Response(
+            200,
+            json={
+                "access_token": "fresh-access",
+                "expires_in": 7200,
+            },
+        )
+        real_replace = os.replace
+
+        with (
+            patch(
+                "time.time",
+                return_value=2_000_000_000,
+            ),
+            patch(
+                "httpx.post",
+                return_value=refresh_response,
+            ) as post,
+            patch(
+                "sudhir_codex_gateway.credentials.os.replace",
+                wraps=real_replace,
+            ) as replace,
+        ):
+            try:
+                headers = CredentialResolver(auth_path).authorization_headers(
+                    self.xai_model()
+                )
+            except GatewayError as exc:
+                self.fail(f"xAI OAuth refresh was rejected: {exc}")
+
+        self.assertEqual(headers, {"Authorization": "Bearer fresh-access"})
+        self.assertEqual(
+            json.loads(auth_path.read_text(encoding="utf-8")),
+            {
+                "xai": {
+                    "type": "oauth",
+                    "access": "fresh-access",
+                    "refresh": "existing-refresh",
+                    "expires": 2_000_006_900_000,
+                },
+                "other": {"type": "api_key", "key": "other-secret"},
+            },
+        )
+        replace.assert_called_once()
+        if os.name != "nt":
+            self.assertEqual(auth_path.stat().st_mode & 0o777, 0o600)
+        post.assert_called_once()
+        self.assertEqual(
+            post.call_args.kwargs["data"],
+            {
+                "grant_type": "refresh_token",
+                "client_id": "b1a00492-073a-47ea-816f-4c329264a828",
+                "refresh_token": "existing-refresh",
+            },
+        )
 
     def test_anthropic_route_uses_messages_headers(self) -> None:
         document = basic_pi_document()
