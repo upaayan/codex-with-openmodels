@@ -196,7 +196,7 @@ if [ "${sudhir_prebuilt}" -eq 0 ]; then
     rustup default "${sudhir_rust_version}"
 fi
 
-"${sudhir_uv}" venv --python "${sudhir_python}" "${sudhir_root}/.venv"
+"${sudhir_uv}" venv --clear --python "${sudhir_python}" "${sudhir_root}/.venv"
 "${sudhir_uv}" pip install \
     --python "${sudhir_root}/.venv/bin/python" \
     --editable "${sudhir_root}/sudhir_codex"
