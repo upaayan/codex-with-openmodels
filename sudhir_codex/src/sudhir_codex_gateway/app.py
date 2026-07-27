@@ -274,10 +274,10 @@ class GatewayApp:
                 "model_not_found",
                 f"Unknown Cursor model ID {model_id!r}; refresh the model catalog",
             )
-        model = self.catalog().by_gateway_id.get(model_id)
-        if model is not None:
-            return self._open_model_response(request, model)
         if model_id.startswith("pi-"):
+            model = self.catalog().by_gateway_id.get(model_id)
+            if model is not None:
+                return self._open_model_response(request, model)
             raise GatewayError(
                 404,
                 "model_not_found",

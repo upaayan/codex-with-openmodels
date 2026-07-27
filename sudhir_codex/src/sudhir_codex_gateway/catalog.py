@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,7 @@ from .cursor_catalog import CURSOR_MODEL_ROUTES
 from .cursor_catalog import cursor_model_info
 from .errors import GatewayError
 
+LOGGER = logging.getLogger(__name__)
 OPENAI_CODEX_PROVIDER = "openai-codex"
 MODEL_ID_PREFIX = "pi-"
 SUPPORTED_OPEN_MODEL_APIS = {
@@ -119,26 +121,36 @@ class CatalogLoader:
             if provider_id == OPENAI_CODEX_PROVIDER:
                 continue
             if not isinstance(provider_id, str) or not isinstance(provider, dict):
-                raise GatewayError(
-                    503,
-                    "pi_provider_invalid",
-                    "Provider entries must be named objects",
+                LOGGER.warning(
+                    "Skipping malformed provider %r: pi_provider_invalid",
+                    provider_id,
                 )
+                continue
             models = provider.get("models", [])
             if not isinstance(models, list):
-                raise GatewayError(
-                    503,
-                    "pi_provider_invalid",
-                    f"Provider {provider_id!r} has a non-list models field",
+                LOGGER.warning(
+                    "Skipping malformed provider %r: pi_provider_invalid",
+                    provider_id,
                 )
-            for model in models:
-                resolved_model = self._resolve_model(provider_id, provider, model)
-                if resolved_model.gateway_id in seen:
-                    raise GatewayError(
-                        503,
-                        "duplicate_model_id",
-                        f"Duplicate generated model ID {resolved_model.gateway_id!r}",
+                continue
+            for model_index, model in enumerate(models):
+                try:
+                    resolved_model = self._resolve_model(provider_id, provider, model)
+                except GatewayError as exc:
+                    LOGGER.warning(
+                        "Skipping malformed model %d for provider %r: %s",
+                        model_index,
+                        provider_id,
+                        exc.code,
                     )
+                    continue
+                if resolved_model.gateway_id in seen:
+                    LOGGER.warning(
+                        "Skipping duplicate model %d for provider %r: duplicate_model_id",
+                        model_index,
+                        provider_id,
+                    )
+                    continue
                 seen.add(resolved_model.gateway_id)
                 resolved.append(resolved_model)
 

@@ -377,7 +377,14 @@ class GatewayAppTests(unittest.TestCase):
         )
         write_json(
             self.pi / "auth.json",
-            {"xai": {"type": "api_key", "key": "xai-secret"}},
+            {
+                "xai": {
+                    "type": "oauth",
+                    "access": "xai-secret",
+                    "refresh": "xai-refresh",
+                    "expires": 9_999_999_999_999,
+                }
+            },
         )
         observed: dict[str, object] = {}
 
@@ -557,6 +564,70 @@ class GatewayAppTests(unittest.TestCase):
         self.assertNotIn("gpt-private", audit)
         self.assertNotIn("chatgpt-secret", audit)
         self.assertNotIn("account-secret", audit)
+
+    def test_malformed_pi_catalog_cannot_block_gpt_requests(self) -> None:
+        write_json(
+            self.pi / "models.json",
+            {
+                "providers": {
+                    "broken": {
+                        "models": [{"id": "broken/model"}],
+                    }
+                }
+            },
+        )
+        post_calls = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal post_calls
+            if request.method == "GET":
+                return httpx.Response(
+                    200,
+                    json={
+                        "models": [
+                            {
+                                "slug": "gpt-test",
+                                "display_name": "GPT Test",
+                                "visibility": "list",
+                            }
+                        ]
+                    },
+                )
+            post_calls += 1
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "text/event-stream"},
+                content=(
+                    b"event: response.completed\n"
+                    b'data: {"type":"response.completed"}\n\n'
+                ),
+            )
+
+        app = GatewayApp(
+            self.settings,
+            http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        response: StreamingResponse | None = None
+        try:
+            result = app.responses(
+                {"Authorization": "Bearer chatgpt-secret"},
+                json.dumps(
+                    {
+                        "model": "gpt-test",
+                        "input": [],
+                        "stream": True,
+                    }
+                ).encode(),
+            )
+            self.assertIsInstance(result, StreamingResponse)
+            response = result
+            self.assertEqual(b"".join(response.response.iter_bytes())[:6], b"event:")
+        finally:
+            if response is not None:
+                response.response.close()
+            app.close()
+
+        self.assertEqual(post_calls, 1)
 
     def test_pi_catalog_refreshes_additions_and_removals(self) -> None:
         app = GatewayApp(
