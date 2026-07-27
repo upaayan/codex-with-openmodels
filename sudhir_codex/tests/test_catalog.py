@@ -99,24 +99,56 @@ class CatalogTests(unittest.TestCase):
 
         self.assertTrue(info["supports_search_tool"])
 
-    def test_rejects_duplicate_generated_ids(self) -> None:
+    def test_duplicate_generated_ids_keep_the_first_healthy_model(self) -> None:
         document = basic_pi_document()
         document["providers"]["demo"]["models"].append(
             {"id": "demo/model", "name": "Duplicate"}
         )
         write_json(self.pi_dir / "models.json", document)
 
-        with self.assertRaisesRegex(GatewayError, "Duplicate generated model ID"):
-            self.loader().load()
+        with self.assertLogs("sudhir_codex_gateway.catalog", level="WARNING"):
+            catalog = self.loader().load()
 
-    def test_rejects_remote_plain_http_endpoint(self) -> None:
+        self.assertEqual(
+            [model.gateway_id for model in catalog.models],
+            ["pi-demo/demo/model"],
+        )
+
+    def test_malformed_provider_and_model_do_not_hide_healthy_models(self) -> None:
+        document = basic_pi_document()
+        document["providers"]["broken-provider"] = {
+            "models": [{"id": "broken/model"}]
+        }
+        document["providers"]["demo"]["models"].append({"name": "Missing ID"})
+        write_json(self.pi_dir / "models.json", document)
+
+        with self.assertLogs(
+            "sudhir_codex_gateway.catalog",
+            level="WARNING",
+        ) as logs:
+            catalog = self.loader().load()
+
+        self.assertEqual(
+            [model.gateway_id for model in catalog.models],
+            ["pi-demo/demo/model"],
+        )
+        self.assertIn("pi_provider_endpoint_missing", "\n".join(logs.output))
+        self.assertIn("pi_model_invalid", "\n".join(logs.output))
+
+    def test_skips_remote_plain_http_endpoint(self) -> None:
         write_json(
             self.pi_dir / "models.json",
             basic_pi_document("http://pi.test/v1"),
         )
 
-        with self.assertRaisesRegex(GatewayError, "HTTPS or loopback HTTP"):
-            self.loader().load()
+        with self.assertLogs(
+            "sudhir_codex_gateway.catalog",
+            level="WARNING",
+        ) as logs:
+            catalog = self.loader().load()
+
+        self.assertEqual(catalog.models, ())
+        self.assertIn("pi_provider_endpoint_invalid", "\n".join(logs.output))
 
     def test_synthesized_model_is_picker_and_agent_visible(self) -> None:
         write_json(self.pi_dir / "models.json", basic_pi_document())
