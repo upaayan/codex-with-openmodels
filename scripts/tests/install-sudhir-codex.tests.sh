@@ -60,7 +60,21 @@ printf '%s\n' \
     'set -eu' \
     'printf "%s\n" "$*" >>"${UV_LOG}"' \
     'if [ "${1:-}" = "venv" ]; then' \
-    '    venv_path="$4"' \
+    '    venv_path=""' \
+    '    clear=0' \
+    '    for argument in "$@"; do' \
+    '        venv_path="${argument}"' \
+    '        if [ "${argument}" = "--clear" ]; then' \
+    '            clear=1' \
+    '        fi' \
+    '    done' \
+    '    if [ -d "${venv_path}" ] && [ "${clear}" -ne 1 ]; then' \
+    '        printf "%s\n" "existing virtual environment requires --clear" >&2' \
+    '        exit 42' \
+    '    fi' \
+    '    if [ "${clear}" -eq 1 ]; then' \
+    '        rm -rf "${venv_path}"' \
+    '    fi' \
     '    mkdir -p "${venv_path}/bin"' \
     '    printf "%s\n" "#!/bin/sh" "exit 0" >"${venv_path}/bin/python"' \
     '    chmod +x "${venv_path}/bin/python"' \
@@ -82,8 +96,20 @@ SUDHIR_CODEX_NPM="${fake_bin}/npm" \
     --archive "${archive}" \
     --checksums "${checksums}"
 
+HOME="${fixture_home}" \
+PATH="${fake_bin}:${PATH}" \
+UV_LOG="${uv_log}" \
+SUDHIR_CODEX_ROOT="${fixture_root}" \
+SUDHIR_CODEX_STATE="${fixture_home}/.sudhir-codex" \
+SUDHIR_CODEX_PYTHON="/usr/local/bin/python3.12" \
+SUDHIR_CODEX_UV="${fake_bin}/uv" \
+SUDHIR_CODEX_NPM="${fake_bin}/npm" \
+    "${fixture_root}/scripts/install-sudhir-codex" \
+    --archive "${archive}" \
+    --checksums "${checksums}"
+
 grep -F \
-    "venv --python /usr/local/bin/python3.12 ${fixture_root}/.venv" \
+    "venv --clear --python /usr/local/bin/python3.12 ${fixture_root}/.venv" \
     "${uv_log}" >/dev/null
 
 printf '%s\n' "install-sudhir-codex tests passed"
