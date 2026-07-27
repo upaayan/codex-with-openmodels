@@ -138,6 +138,10 @@ jobs:
         shell: pwsh
         run: .\scripts\tests\setup-pi-models.tests.ps1
 
+      - name: Test the Windows skills and AGENTS installer
+        shell: pwsh
+        run: .\scripts\tests\install-sudhir-codex-context.tests.ps1
+
       - name: Check the pinned Windows Cursor worker
         working-directory: sudhir_codex/cursor_worker
         shell: pwsh
