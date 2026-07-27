@@ -10,6 +10,7 @@ sudhir_cargo_home="${sudhir_toolchains}/cargo"
 sudhir_rust_version="1.95.0"
 sudhir_uv="${SUDHIR_CODEX_UV:-}"
 sudhir_npm="${SUDHIR_CODEX_NPM:-}"
+sudhir_python="${SUDHIR_CODEX_PYTHON:-python3}"
 sudhir_archive="${SUDHIR_CODEX_ARCHIVE:-}"
 sudhir_checksums="${SUDHIR_CODEX_CHECKSUMS:-}"
 
@@ -195,7 +196,7 @@ if [ "${sudhir_prebuilt}" -eq 0 ]; then
     rustup default "${sudhir_rust_version}"
 fi
 
-"${sudhir_uv}" venv --python python3 "${sudhir_root}/.venv"
+"${sudhir_uv}" venv --python "${sudhir_python}" "${sudhir_root}/.venv"
 "${sudhir_uv}" pip install \
     --python "${sudhir_root}/.venv/bin/python" \
     --editable "${sudhir_root}/sudhir_codex"

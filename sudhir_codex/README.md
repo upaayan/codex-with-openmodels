@@ -45,6 +45,10 @@ verifies the checksum and exact archive contents, installs the CLI and helper
 layout into `dist`, and retains an existing runtime as `.previous`. The Linux
 bundle installs `bwrap` under `dist/codex-resources/`.
 
+If the system `python3` is older than 3.11 but a newer interpreter is already
+installed, set `SUDHIR_CODEX_PYTHON` to its executable path when running the
+installer.
+
 The source-build mode remains available:
 
 ```bash
