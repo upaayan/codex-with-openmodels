@@ -12,8 +12,8 @@ from .errors import GatewayError
 from .reasoning import reasoning_request_options
 
 FUNCTION_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+REASONING_FIELDS = ("reasoning_content", "reasoning", "reasoning_text")
 IGNORED_INPUT_TYPES = {
-    "reasoning",
     "compaction",
     "context_compaction",
     "compaction_trigger",
@@ -51,9 +51,13 @@ class ToolBindings:
     """A reversible mapping between Responses and Chat tool names."""
 
     def __init__(self, tools: object) -> None:
+        # `bindings` and `by_encoded` contain active tools only. Historical
+        # bindings share the encoding collision domain but cannot authorize a
+        # new provider tool call.
         self.bindings: list[ToolBinding] = []
         self.by_encoded: dict[str, ToolBinding] = {}
         self.by_original: dict[tuple[str | None, str, str], ToolBinding] = {}
+        self._all_by_encoded: dict[str, ToolBinding] = {}
         self._parse(tools)
 
     def chat_tools(self) -> list[dict[str, Any]]:
@@ -76,6 +80,24 @@ class ToolBindings:
         kind: str = "function",
     ) -> ToolBinding | None:
         return self.by_original.get((namespace, name, kind))
+
+    def for_history(
+        self,
+        namespace: str | None,
+        name: str,
+        kind: str = "function",
+    ) -> ToolBinding:
+        existing = self.for_original(namespace, name, kind)
+        if existing is not None:
+            return existing
+        return self._add(
+            kind=kind,
+            name=name,
+            namespace=namespace,
+            description="",
+            parameters={"type": "object", "properties": {}},
+            active=False,
+        )
 
     def _parse(self, tools: object) -> None:
         if tools is None:
@@ -122,6 +144,7 @@ class ToolBindings:
                         tool.get("description", "Search available Codex tools.")
                     ),
                     parameters=parameters,
+                    active=True,
                 )
             elif kind == "web_search":
                 raise GatewayError(
@@ -148,6 +171,7 @@ class ToolBindings:
             namespace=namespace,
             description=str(tool.get("description", "")),
             parameters=_schema(tool.get("parameters")),
+            active=True,
         )
 
     def _add_custom(self, tool: dict[str, Any], namespace: str | None) -> None:
@@ -167,6 +191,7 @@ class ToolBindings:
                 "required": ["input"],
                 "additionalProperties": False,
             },
+            active=True,
         )
 
     def _add(
@@ -177,15 +202,18 @@ class ToolBindings:
         namespace: str | None,
         description: str,
         parameters: dict[str, Any],
-    ) -> None:
+        active: bool,
+    ) -> ToolBinding:
         original = (namespace, name, kind)
-        if original in self.by_original:
-            return
+        existing = self.by_original.get(original)
+        if existing is not None:
+            return existing
         qualified = f"{namespace}__{name}" if namespace else name
-        encoded = _encoded_tool_name(qualified, len(self.bindings))
-        while encoded in self.by_encoded:
+        encoded = _encoded_tool_name(qualified, len(self._all_by_encoded))
+        while encoded in self._all_by_encoded:
             encoded = _encoded_tool_name(
-                f"{qualified}_{len(self.bindings)}", len(self.bindings)
+                f"{qualified}_{len(self._all_by_encoded)}",
+                len(self._all_by_encoded),
             )
         binding = ToolBinding(
             encoded_name=encoded,
@@ -195,9 +223,12 @@ class ToolBindings:
             description=description,
             parameters=parameters,
         )
-        self.bindings.append(binding)
-        self.by_encoded[encoded] = binding
         self.by_original[original] = binding
+        self._all_by_encoded[encoded] = binding
+        if active:
+            self.bindings.append(binding)
+            self.by_encoded[encoded] = binding
+        return binding
 
 
 def responses_to_chat_request(
@@ -273,6 +304,28 @@ def chat_response_to_sse(
         {"type": "response.created", "response": {"id": response_id}}
     ]
     output_count = 0
+    reasoning_text, reasoning_field = _chat_reasoning(message)
+    if reasoning_text:
+        signature = message.get("reasoning_signature")
+        encrypted_content: str | None = None
+        if isinstance(signature, str) and signature:
+            encrypted_content = signature
+        events.append(
+            {
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "reasoning",
+                    "id": f"rs_sudhir_{reasoning_field}_{uuid.uuid4().hex}",
+                    "summary": [],
+                    "content": [
+                        {"type": "reasoning_text", "text": reasoning_text}
+                    ],
+                    "encrypted_content": encrypted_content,
+                },
+            }
+        )
+        output_count += 1
+
     text = _chat_content_text(message.get("content"))
     if text:
         events.append(
@@ -338,22 +391,52 @@ def _translate_input(
         messages.append({"role": "system", "content": instructions})
 
     pending_calls: list[dict[str, Any]] = []
+    pending_assistant: dict[str, Any] | None = None
     call_bindings: dict[str, ToolBinding] = {}
+    pending_reasoning_text: str | None = None
+    pending_reasoning_field = "reasoning_content"
+    pending_reasoning_signature: str | None = None
+
+    def apply_pending_reasoning(assistant: dict[str, Any]) -> None:
+        nonlocal pending_reasoning_text
+        nonlocal pending_reasoning_field
+        nonlocal pending_reasoning_signature
+        if pending_reasoning_text is None:
+            return
+        field = pending_reasoning_field
+        if _normalizes_reasoning_content(model):
+            field = "reasoning_content"
+        assistant[field] = pending_reasoning_text
+        if model.api == "anthropic-messages" and pending_reasoning_signature:
+            assistant["reasoning_signature"] = pending_reasoning_signature
+        pending_reasoning_text = None
+        pending_reasoning_field = "reasoning_content"
+        pending_reasoning_signature = None
+
+    def ensure_reasoning_content(assistant: dict[str, Any]) -> None:
+        if (
+            _normalizes_reasoning_content(model)
+            and "reasoning_content" not in assistant
+        ):
+            assistant["reasoning_content"] = ""
 
     def flush_pending() -> None:
-        if not pending_calls:
+        nonlocal pending_assistant
+        if not pending_calls and pending_assistant is None:
             return
-        assistant: dict[str, Any] = {
+        assistant = pending_assistant or {
             "role": "assistant",
             "content": None,
-            "tool_calls": list(pending_calls),
         }
-        if model.compat.get("requiresReasoningContentOnAssistantMessages"):
-            assistant["reasoning_content"] = ""
+        if pending_calls:
+            assistant["tool_calls"] = list(pending_calls)
+        apply_pending_reasoning(assistant)
+        ensure_reasoning_content(assistant)
         messages.append(assistant)
         pending_calls.clear()
+        pending_assistant = None
 
-    for item in input_items:
+    for index, item in enumerate(input_items):
         if not isinstance(item, dict):
             raise GatewayError(
                 400, "invalid_input", "Responses input item is not an object"
@@ -371,11 +454,7 @@ def _translate_input(
             name = str(item.get("name", "tool_search"))
             binding = bindings.for_original(namespace, name, binding_kind)
             if binding is None:
-                raise GatewayError(
-                    400,
-                    "unknown_history_tool",
-                    f"History references unknown tool {name!r}",
-                )
+                binding = bindings.for_history(namespace, name, binding_kind)
             call_id = str(item.get("call_id") or f"call_{uuid.uuid4().hex}")
             arguments = item.get("arguments", "{}")
             if kind == "custom_tool_call":
@@ -397,8 +476,19 @@ def _translate_input(
             call_bindings[call_id] = binding
             continue
 
+        if kind == "additional_tools":
+            continue
+
         flush_pending()
-        if kind == "message":
+        if kind == "reasoning":
+            reasoning_text = _reasoning_item_text(item)
+            if reasoning_text:
+                pending_reasoning_text = reasoning_text
+                (
+                    pending_reasoning_field,
+                    pending_reasoning_signature,
+                ) = _reasoning_item_metadata(item)
+        elif kind == "message":
             role = str(item.get("role", "user"))
             if role == "developer":
                 role = "system"
@@ -410,10 +500,12 @@ def _translate_input(
                 assistant=role == "assistant",
             )
             message: dict[str, Any] = {"role": role, "content": content}
-            if role == "assistant" and model.compat.get(
-                "requiresReasoningContentOnAssistantMessages"
-            ):
-                message["reasoning_content"] = ""
+            if role == "assistant":
+                if _followed_by_tool_call(input_items, index):
+                    pending_assistant = message
+                    continue
+                apply_pending_reasoning(message)
+                ensure_reasoning_content(message)
             messages.append(message)
         elif kind == "agent_message":
             text_parts = []
@@ -451,8 +543,6 @@ def _translate_input(
             )
             call_bindings.pop(call_id, None)
         elif kind in IGNORED_INPUT_TYPES:
-            continue
-        elif kind == "additional_tools":
             continue
         else:
             raise GatewayError(
@@ -576,6 +666,16 @@ def _responses_usage(usage: object) -> dict[str, Any]:
     output_tokens = _nonnegative_int(
         usage.get("completion_tokens", usage.get("output_tokens", 0))
     )
+    output_details = usage.get(
+        "completion_tokens_details",
+        usage.get("output_tokens_details"),
+    )
+    reasoning_tokens: object = None
+    if isinstance(output_details, dict):
+        reasoning_tokens = output_details.get("reasoning_tokens")
+    responses_output_details = None
+    if isinstance(reasoning_tokens, int) and reasoning_tokens >= 0:
+        responses_output_details = {"reasoning_tokens": reasoning_tokens}
     total_tokens = _nonnegative_int(
         usage.get("total_tokens", input_tokens + output_tokens)
     )
@@ -583,9 +683,62 @@ def _responses_usage(usage: object) -> dict[str, Any]:
         "input_tokens": input_tokens,
         "input_tokens_details": None,
         "output_tokens": output_tokens,
-        "output_tokens_details": None,
+        "output_tokens_details": responses_output_details,
         "total_tokens": total_tokens,
     }
+
+
+def _chat_reasoning(message: dict[str, Any]) -> tuple[str, str]:
+    for field in REASONING_FIELDS:
+        value = message.get(field)
+        if isinstance(value, str) and value:
+            return value, field
+    return "", "reasoning_content"
+
+
+def _reasoning_item_text(item: dict[str, Any]) -> str:
+    content = item.get("content")
+    if not isinstance(content, list):
+        return ""
+    return "".join(
+        part["text"]
+        for part in content
+        if isinstance(part, dict)
+        and part.get("type") in {"reasoning_text", "text"}
+        and isinstance(part.get("text"), str)
+    )
+
+
+def _reasoning_item_metadata(item: dict[str, Any]) -> tuple[str, str | None]:
+    encrypted = item.get("encrypted_content")
+    signature = encrypted if isinstance(encrypted, str) and encrypted else None
+    item_id = item.get("id")
+    if isinstance(item_id, str):
+        for field in sorted(REASONING_FIELDS, key=len, reverse=True):
+            if item_id.startswith(f"rs_sudhir_{field}_"):
+                return field, signature
+    return "reasoning_content", signature
+
+
+def _normalizes_reasoning_content(model: OpenModel) -> bool:
+    return (
+        model.provider_id in {"deepseek", "opencode-go"}
+        or model.compat.get("thinkingFormat") == "deepseek"
+        or model.compat.get("requiresReasoningContentOnAssistantMessages") is True
+    )
+
+
+def _followed_by_tool_call(input_items: list[object], index: int) -> bool:
+    for candidate in input_items[index + 1 :]:
+        if not isinstance(candidate, dict):
+            continue
+        kind = candidate.get("type")
+        if kind in {"function_call", "custom_tool_call", "tool_search_call"}:
+            return True
+        if kind == "additional_tools":
+            continue
+        return False
+    return False
 
 
 def _chat_content_text(content: object) -> str:

@@ -1491,6 +1491,7 @@ impl Session {
         })
     }
 
+    #[cfg(test)]
     async fn previous_turn_settings(&self) -> Option<PreviousTurnSettings> {
         let state = self.state.lock().await;
         state.previous_turn_settings()
