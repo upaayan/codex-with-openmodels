@@ -310,6 +310,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
           targets: x86_64-pc-windows-msvc
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        if: matrix.bundle == 'primary'
+        with:
+          python-version: "3.13"
+      - name: Configure rusty_v8 artifacts
+        if: matrix.bundle == 'primary'
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: x86_64-pc-windows-msvc
       - name: Configure the MSVC and Windows SDK environment
         uses: ./.github/actions/setup-msvc-env
         with:
