@@ -1157,8 +1157,9 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
                     if communication.author == AgentPath::root()
                         && communication.recipient.as_str() == "/root/test_process"
                         && communication.other_recipients.is_empty()
-                        && communication.content == "encrypted-spawn-message"
-                        && communication.encrypted_content.is_none()
+                        && communication.content.is_empty()
+                        && communication.encrypted_content.as_deref()
+                            == Some("encrypted-spawn-message")
                         && communication.trigger_turn
             )
     }));
@@ -1184,8 +1185,9 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
                     if communication.author == AgentPath::root()
                         && communication.recipient.as_str() == "/root/test_process"
                         && communication.other_recipients.is_empty()
-                        && communication.content == "encrypted-send-message"
-                        && communication.encrypted_content.is_none()
+                        && communication.content.is_empty()
+                        && communication.encrypted_content.as_deref()
+                            == Some("encrypted-send-message")
                         && !communication.trigger_turn
             )
     }));
@@ -1380,8 +1382,8 @@ async fn multi_agent_v2_send_message_accepts_root_target_from_child() {
                     if communication.author == child_path
                         && communication.recipient == AgentPath::root()
                         && communication.other_recipients.is_empty()
-                        && communication.content == "encrypted-done"
-                        && communication.encrypted_content.is_none()
+                        && communication.content.is_empty()
+                        && communication.encrypted_content.as_deref() == Some("encrypted-done")
                         && !communication.trigger_turn
             )
     }));
@@ -1894,8 +1896,8 @@ async fn multi_agent_v2_send_message_rejects_interrupt_parameter() {
             if communication.author == AgentPath::root()
                 && communication.recipient.as_str() == "/root/worker"
                 && communication.other_recipients.is_empty()
-                && communication.content == "continue"
-                && communication.encrypted_content.is_none()
+                && communication.content.is_empty()
+                && communication.encrypted_content.as_deref() == Some("continue")
                 && !communication.trigger_turn
     )));
 }
@@ -1980,8 +1982,7 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
                 Op::InterAgentCommunication { communication }
                     if communication.author == AgentPath::root()
                         && communication.recipient == worker_path
-                        && communication.content == "continue"
-                        && communication.encrypted_content.is_none()
+                        && communication.encrypted_content.as_deref() == Some("continue")
                         && communication.trigger_turn
             )
     }));
@@ -2978,13 +2979,16 @@ async fn multi_agent_v2_wait_agent_accepts_timeout_only_argument() {
 
     session
         .input_queue
-        .enqueue_mailbox_communication(InterAgentCommunication::new(
-            worker_path,
-            AgentPath::root(),
-            Vec::new(),
-            "hello from worker".to_string(),
-            /*trigger_turn*/ false,
-        ))
+        .enqueue_mailbox_communication(
+            InterAgentCommunication::new(
+                worker_path,
+                AgentPath::root(),
+                Vec::new(),
+                "hello from worker".to_string(),
+                /*trigger_turn*/ false,
+            ),
+            /*parent_turn_id*/ None,
+        )
         .await;
 
     let output = wait_task
@@ -3462,13 +3466,16 @@ async fn multi_agent_v2_wait_agent_returns_summary_for_mailbox_activity() {
 
     session
         .input_queue
-        .enqueue_mailbox_communication(InterAgentCommunication::new(
-            worker_path,
-            AgentPath::root(),
-            Vec::new(),
-            "completed".to_string(),
-            /*trigger_turn*/ false,
-        ))
+        .enqueue_mailbox_communication(
+            InterAgentCommunication::new(
+                worker_path,
+                AgentPath::root(),
+                Vec::new(),
+                "completed".to_string(),
+                /*trigger_turn*/ false,
+            ),
+            /*parent_turn_id*/ None,
+        )
         .await;
 
     let wait_output = wait_task
@@ -3535,13 +3542,16 @@ async fn multi_agent_v2_wait_agent_returns_for_already_queued_mail() {
 
     session
         .input_queue
-        .enqueue_mailbox_communication(InterAgentCommunication::new(
-            worker_path,
-            AgentPath::root(),
-            Vec::new(),
-            "already queued".to_string(),
-            /*trigger_turn*/ false,
-        ))
+        .enqueue_mailbox_communication(
+            InterAgentCommunication::new(
+                worker_path,
+                AgentPath::root(),
+                Vec::new(),
+                "already queued".to_string(),
+                /*trigger_turn*/ false,
+            ),
+            /*parent_turn_id*/ None,
+        )
         .await;
 
     let output = timeout(
@@ -3634,13 +3644,16 @@ async fn multi_agent_v2_wait_agent_wakes_on_any_mailbox_notification() {
 
     session
         .input_queue
-        .enqueue_mailbox_communication(InterAgentCommunication::new(
-            worker_b_path,
-            AgentPath::root(),
-            Vec::new(),
-            "from worker b".to_string(),
-            /*trigger_turn*/ false,
-        ))
+        .enqueue_mailbox_communication(
+            InterAgentCommunication::new(
+                worker_b_path,
+                AgentPath::root(),
+                Vec::new(),
+                "from worker b".to_string(),
+                /*trigger_turn*/ false,
+            ),
+            /*parent_turn_id*/ None,
+        )
         .await;
 
     let output = wait_task
@@ -3722,13 +3735,16 @@ async fn multi_agent_v2_wait_agent_does_not_return_completed_content() {
 
     session
         .input_queue
-        .enqueue_mailbox_communication(InterAgentCommunication::new(
-            worker_path,
-            AgentPath::root(),
-            Vec::new(),
-            "sensitive child output".to_string(),
-            /*trigger_turn*/ false,
-        ))
+        .enqueue_mailbox_communication(
+            InterAgentCommunication::new(
+                worker_path,
+                AgentPath::root(),
+                Vec::new(),
+                "sensitive child output".to_string(),
+                /*trigger_turn*/ false,
+            ),
+            /*parent_turn_id*/ None,
+        )
         .await;
 
     let output = wait_task

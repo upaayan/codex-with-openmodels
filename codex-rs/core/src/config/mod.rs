@@ -78,6 +78,7 @@ use codex_login::AuthManagerConfig;
 use codex_login::AuthRouteConfig;
 use codex_mcp::McpConfig;
 use codex_mcp::McpPluginAttribution;
+use codex_mcp::McpProtocolMode;
 use codex_mcp::McpServerRegistration;
 use codex_mcp::ResolvedMcpCatalog;
 use codex_memories_read::memory_root;
@@ -272,18 +273,16 @@ const LOCAL_DEV_BUILD_VERSION: &str = "0.0.0";
 pub const CONFIG_TOML_FILE: &str = "config.toml";
 const CONFIG_PROFILE_V2_SUFFIX: &str = ".config.toml";
 
-fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
+fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<AbsolutePathBuf> {
     let raw = std::env::var(codex_state::SQLITE_HOME_ENV).ok()?;
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return None;
     }
-    let path = PathBuf::from(trimmed);
-    if path.is_absolute() {
-        Some(path)
-    } else {
-        Some(resolved_cwd.join(path))
-    }
+    Some(AbsolutePathBuf::resolve_path_against_base(
+        trimmed,
+        resolved_cwd,
+    ))
 }
 
 fn resolve_cli_auth_credentials_store_mode(
@@ -450,16 +449,12 @@ impl Permissions {
         self.permission_profile_state.profile_workspace_roots()
     }
 
-    fn materialized_permission_profile(&self) -> PermissionProfile {
-        self.permission_profile()
-            .clone()
-            .materialize_project_roots_with_workspace_roots(&self.workspace_roots)
-    }
-
     /// Effective runtime permissions after config requirements and runtime
     /// workspace-root materialization have been applied.
     pub fn effective_permission_profile(&self) -> PermissionProfile {
-        self.materialized_permission_profile()
+        self.permission_profile()
+            .clone()
+            .materialize_project_roots_with_workspace_roots(&self.workspace_roots)
     }
 
     /// Named profile selected by config, if the current profile has one.
@@ -469,7 +464,7 @@ impl Permissions {
 
     /// Effective filesystem sandbox policy derived from the canonical profile.
     pub fn file_system_sandbox_policy(&self) -> FileSystemSandboxPolicy {
-        self.materialized_permission_profile()
+        self.effective_permission_profile()
             .file_system_sandbox_policy()
     }
 
@@ -480,7 +475,7 @@ impl Permissions {
 
     /// Legacy compatibility projection derived from the canonical profile.
     pub fn legacy_sandbox_policy(&self, cwd: &Path) -> SandboxPolicy {
-        let permission_profile = self.materialized_permission_profile();
+        let permission_profile = self.effective_permission_profile();
         compatibility_sandbox_policy_for_permission_profile(&permission_profile, cwd)
     }
 
@@ -829,6 +824,9 @@ pub struct Config {
     /// Definition for MCP servers that Codex can reach out to for tool calls.
     pub mcp_servers: Constrained<HashMap<String, McpServerConfig>>,
 
+    /// When present, only these MCP servers omit the legacy `mcp__` namespace prefix.
+    pub non_prefixed_mcp_tool_servers: Option<Vec<String>>,
+
     /// Preferred store for MCP OAuth credentials.
     /// keyring: Use an OS-specific keyring service.
     ///          Credentials stored in the keyring will only be readable by Codex unless the user explicitly grants access via OS-level keyring access.
@@ -890,8 +888,8 @@ pub struct Config {
     /// overridden by the `CODEX_HOME` environment variable).
     pub codex_home: AbsolutePathBuf,
 
-    /// Directory where Codex stores the SQLite state DB.
-    pub sqlite_home: PathBuf,
+    /// Resolved configuration shared by all Codex SQLite databases.
+    pub sqlite: codex_state::SqliteConfig,
 
     /// Directory where Codex writes log files (defaults to `$CODEX_HOME/log`).
     pub log_dir: PathBuf,
@@ -1029,6 +1027,9 @@ pub struct Config {
     /// Whether to register the experimental request_user_input tool.
     pub experimental_request_user_input_enabled: bool,
 
+    /// Whether to register the update_plan tool.
+    pub update_plan_enabled: bool,
+
     /// Configuration for the experimental code-mode tool surface.
     pub code_mode: CodeModeConfig,
 
@@ -1095,6 +1096,8 @@ pub struct Config {
 pub struct CodeModeConfig {
     pub excluded_tool_namespaces: Vec<String>,
     pub direct_only_tool_namespaces: Vec<String>,
+    /// Keep code mode fail-closed when the standalone host is unavailable.
+    pub disable_in_process_fallback: bool,
 }
 
 pub(crate) const DEFAULT_TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE: &str = concat!(
@@ -1115,6 +1118,78 @@ pub struct TokenBudgetConfig {
 }
 
 impl TokenBudgetConfig {
+    pub(crate) fn validate(&self) -> std::io::Result<()> {
+        if self
+            .reminder_threshold_tokens
+            .is_some_and(|tokens| tokens <= 0)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "features.token_budget.reminder_threshold_tokens must be positive",
+            ));
+        }
+
+        if self.reminder_message_template.trim().is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "features.token_budget.reminder_message_template must not be empty",
+            ));
+        }
+        if self.reminder_message_template.len() > TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE_MAX_BYTES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "features.token_budget.reminder_message_template must not exceed {TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE_MAX_BYTES} bytes"
+                ),
+            ));
+        }
+
+        if self
+            .guidance_message
+            .as_ref()
+            .is_some_and(|message| message.len() > TOKEN_BUDGET_GUIDANCE_MESSAGE_MAX_BYTES)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "features.token_budget.guidance_message must not exceed {TOKEN_BUDGET_GUIDANCE_MESSAGE_MAX_BYTES} bytes"
+                ),
+            ));
+        }
+
+        if self
+            .auto_compact_fallback_prompt
+            .as_ref()
+            .is_some_and(|prompt| prompt.len() > AUTO_COMPACT_FALLBACK_PROMPT_MAX_BYTES)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "features.token_budget.auto_compact_fallback_prompt must not exceed {AUTO_COMPACT_FALLBACK_PROMPT_MAX_BYTES} bytes"
+                ),
+            ));
+        }
+        if self.auto_compact_fallback_prompt.is_some()
+            && self.auto_compact_fallback_buffer_tokens.is_none()
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "features.token_budget.auto_compact_fallback_buffer_tokens is required when auto_compact_fallback_prompt is set",
+            ));
+        }
+        if self
+            .auto_compact_fallback_buffer_tokens
+            .is_some_and(|tokens| tokens <= 0)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "features.token_budget.auto_compact_fallback_buffer_tokens must be positive",
+            ));
+        }
+
+        Ok(())
+    }
+
     pub(crate) fn fallback_buffer_tokens(&self) -> i64 {
         if self.auto_compact_fallback_prompt.is_some() {
             self.auto_compact_fallback_buffer_tokens.unwrap_or(0)
@@ -1173,6 +1248,7 @@ pub struct MultiAgentV2Config {
     pub usage_hint_text: Option<String>,
     pub root_agent_usage_hint_text: Option<String>,
     pub subagent_usage_hint_text: Option<String>,
+    pub subagent_developer_instructions: Option<String>,
     pub multi_agent_mode_hint_text: Option<String>,
     pub tool_namespace: Option<String>,
     pub hide_spawn_agent_metadata: bool,
@@ -1197,6 +1273,7 @@ impl MultiAgentV2Config {
                 DEFAULT_MULTI_AGENT_V2_SUBAGENT_USAGE_HINT_TEXT,
                 max_concurrent_threads_per_session,
             )),
+            subagent_developer_instructions: None,
             multi_agent_mode_hint_text: None,
             tool_namespace: Some(DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE.to_string()),
             hide_spawn_agent_metadata: true,
@@ -1434,6 +1511,10 @@ impl ConfigBuilder {
 }
 
 impl Config {
+    pub fn sqlite_config(&self) -> &codex_state::SqliteConfig {
+        &self.sqlite
+    }
+
     pub(crate) fn multi_agent_version_override(&self) -> Option<MultiAgentVersion> {
         if self.features.enabled(Feature::MultiAgentV2) {
             Some(MultiAgentVersion::V2)
@@ -1641,11 +1722,21 @@ impl Config {
             use_legacy_landlock: self.features.use_legacy_landlock(),
             apps_enabled: self.features.enabled(Feature::Apps),
             prefix_mcp_tool_names: self.prefix_mcp_tool_names(),
+            non_prefixed_mcp_tool_servers: if self
+                .features
+                .enabled(Feature::NonPrefixedMcpToolNames)
+            {
+                self.non_prefixed_mcp_tool_servers
+                    .clone()
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            },
+            protocol_mode: self.mcp_protocol_mode(),
             client_elicitation_capability: if self.features.enabled(Feature::AuthElicitation) {
-                ElicitationCapability {
-                    form: Some(FormElicitationCapability::default()),
-                    url: Some(UrlElicitationCapability::default()),
-                }
+                ElicitationCapability::new()
+                    .with_form(FormElicitationCapability::new())
+                    .with_url(UrlElicitationCapability::new())
             } else {
                 // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
                 // indicates this should be an empty object.
@@ -1661,6 +1752,15 @@ impl Config {
 
     pub(crate) fn prefix_mcp_tool_names(&self) -> bool {
         !self.features.enabled(Feature::NonPrefixedMcpToolNames)
+            || self.non_prefixed_mcp_tool_servers.is_some()
+    }
+
+    pub fn mcp_protocol_mode(&self) -> McpProtocolMode {
+        if self.features.enabled(Feature::Mcp20260728) {
+            McpProtocolMode::V20260728
+        } else {
+            McpProtocolMode::Legacy
+        }
     }
 
     pub async fn rebuild_preserving_session_layers(
@@ -1975,6 +2075,13 @@ fn filter_plugin_mcp_servers_by_requirements(
     let Some(requirements) = plugin_requirements else {
         return;
     };
+    if !requirements
+        .value
+        .values()
+        .any(|plugin| plugin.mcp_servers.is_some())
+    {
+        return;
+    }
     let source = requirements.source.clone();
     let plugin_mcp_requirements = requirements
         .value
@@ -2521,6 +2628,14 @@ fn resolve_experimental_request_user_input_enabled(config_toml: &ConfigToml) -> 
         .is_none_or(|config| config.enabled)
 }
 
+fn resolve_update_plan_enabled(config_toml: &ConfigToml) -> bool {
+    config_toml
+        .tools
+        .as_ref()
+        .and_then(|tools| tools.update_plan.as_ref())
+        .is_none_or(|config| config.enabled)
+}
+
 fn resolve_orchestrator_feature_enabled(
     feature: Option<&codex_config::config_toml::OrchestratorFeatureToml>,
 ) -> bool {
@@ -2529,6 +2644,14 @@ fn resolve_orchestrator_feature_enabled(
 
 fn resolve_code_mode_config(config_toml: &ConfigToml) -> CodeModeConfig {
     let base = code_mode_toml_config(config_toml.features.as_ref());
+    let host = config_toml
+        .features
+        .as_ref()
+        .and_then(|features| features.code_mode_host.as_ref())
+        .and_then(|feature| match feature {
+            FeatureToml::Enabled(_) => None,
+            FeatureToml::Config(config) => Some(config),
+        });
 
     CodeModeConfig {
         excluded_tool_namespaces: base
@@ -2538,6 +2661,9 @@ fn resolve_code_mode_config(config_toml: &ConfigToml) -> CodeModeConfig {
         direct_only_tool_namespaces: base
             .and_then(|config| config.direct_only_tool_namespaces.as_ref())
             .cloned()
+            .unwrap_or_default(),
+        disable_in_process_fallback: host
+            .and_then(|config| config.disable_in_process_fallback)
             .unwrap_or_default(),
     }
 }
@@ -2598,6 +2724,9 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
         base.map(|config| &config.subagent_usage_hint_text),
         default_subagent_usage_hint_text,
     );
+    let subagent_developer_instructions = base
+        .and_then(|config| config.subagent_developer_instructions.as_ref())
+        .map(|instructions| instructions.trim().to_string());
     let multi_agent_mode_hint_text = base
         .and_then(|config| config.multi_agent_mode_hint_text.as_ref())
         .cloned()
@@ -2618,6 +2747,7 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
         usage_hint_text,
         root_agent_usage_hint_text,
         subagent_usage_hint_text,
+        subagent_developer_instructions,
         multi_agent_mode_hint_text,
         tool_namespace,
         hide_spawn_agent_metadata,
@@ -2638,85 +2768,29 @@ fn resolve_token_budget_config(
     let token_budget_config = token_budget_toml_config(config_toml.features.as_ref());
     let reminder_threshold_tokens =
         token_budget_config.and_then(|config| config.reminder_threshold_tokens);
-    if reminder_threshold_tokens.is_some_and(|tokens| tokens <= 0) {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "features.token_budget.reminder_threshold_tokens must be positive",
-        ));
-    }
-
     let reminder_message_template = token_budget_config
         .and_then(|config| config.reminder_message_template.clone())
         .unwrap_or_else(|| DEFAULT_TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE.to_string());
-    if reminder_message_template.trim().is_empty() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "features.token_budget.reminder_message_template must not be empty",
-        ));
-    }
-    if reminder_message_template.len() > TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE_MAX_BYTES {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!(
-                "features.token_budget.reminder_message_template must not exceed {TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE_MAX_BYTES} bytes"
-            ),
-        ));
-    }
-
     let guidance_message = token_budget_config
         .and_then(|config| config.guidance_message.clone())
         .filter(|message| !message.trim().is_empty());
-    if guidance_message
-        .as_ref()
-        .is_some_and(|message| message.len() > TOKEN_BUDGET_GUIDANCE_MESSAGE_MAX_BYTES)
-    {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!(
-                "features.token_budget.guidance_message must not exceed {TOKEN_BUDGET_GUIDANCE_MESSAGE_MAX_BYTES} bytes"
-            ),
-        ));
-    }
-
     let auto_compact_fallback_prompt = token_budget_config
         .and_then(|config| config.auto_compact_fallback_prompt.as_deref())
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
-    if auto_compact_fallback_prompt
-        .as_ref()
-        .is_some_and(|prompt| prompt.len() > AUTO_COMPACT_FALLBACK_PROMPT_MAX_BYTES)
-    {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!(
-                "features.token_budget.auto_compact_fallback_prompt must not exceed {AUTO_COMPACT_FALLBACK_PROMPT_MAX_BYTES} bytes"
-            ),
-        ));
-    }
-
     let auto_compact_fallback_buffer_tokens =
         token_budget_config.and_then(|config| config.auto_compact_fallback_buffer_tokens);
-    if auto_compact_fallback_prompt.is_some() && auto_compact_fallback_buffer_tokens.is_none() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "features.token_budget.auto_compact_fallback_buffer_tokens is required when auto_compact_fallback_prompt is set",
-        ));
-    }
-    if auto_compact_fallback_buffer_tokens.is_some_and(|tokens| tokens <= 0) {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "features.token_budget.auto_compact_fallback_buffer_tokens must be positive",
-        ));
-    }
 
-    Ok(Some(TokenBudgetConfig {
+    let token_budget = TokenBudgetConfig {
         reminder_threshold_tokens,
         reminder_message_template,
         guidance_message,
         auto_compact_fallback_prompt,
         auto_compact_fallback_buffer_tokens,
-    }))
+    };
+    token_budget.validate()?;
+    Ok(Some(token_budget))
 }
 
 fn resolve_rollout_budget_config(
@@ -2911,13 +2985,22 @@ pub fn resolve_bootstrap_auth_route_config(
     cfg: &ConfigToml,
     feature_requirements: Option<&Sourced<FeatureRequirementsToml>>,
 ) -> std::io::Result<AuthRouteConfig> {
+    resolve_bootstrap_http_client_factory(cfg, feature_requirements)
+        .map(AuthRouteConfig::from_http_client_factory)
+}
+
+/// Resolves shared HTTP routing for startup work that runs before final [`Config`] loading.
+pub fn resolve_bootstrap_http_client_factory(
+    cfg: &ConfigToml,
+    feature_requirements: Option<&Sourced<FeatureRequirementsToml>>,
+) -> std::io::Result<HttpClientFactory> {
     resolve_bootstrap_respect_system_proxy(cfg, feature_requirements).map(|respect_system_proxy| {
         let outbound_proxy_policy = if respect_system_proxy {
             OutboundProxyPolicy::RespectSystemProxy
         } else {
             OutboundProxyPolicy::ReqwestDefault
         };
-        AuthRouteConfig::from_http_client_factory(HttpClientFactory::new(outbound_proxy_policy))
+        HttpClientFactory::new(outbound_proxy_policy)
     })
 }
 
@@ -3203,6 +3286,17 @@ impl Config {
             feature_requirements,
             &mut startup_warnings,
         )?;
+        let non_prefixed_mcp_tool_servers = if features.enabled(Feature::NonPrefixedMcpToolNames) {
+            cfg.features
+                .as_ref()
+                .and_then(|features| features.non_prefixed_mcp_tool_names.as_ref())
+                .and_then(|feature| match feature {
+                    FeatureToml::Enabled(_) => None,
+                    FeatureToml::Config(config) => config.server_names.clone(),
+                })
+        } else {
+            None
+        };
         let respect_system_proxy = features.enabled(Feature::RespectSystemProxy);
         let enable_network_proxy = features.enabled(Feature::NetworkProxy);
         let configured_windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg);
@@ -3541,6 +3635,7 @@ impl Config {
         let web_search_config = resolve_web_search_config(&cfg);
         let experimental_request_user_input_enabled =
             resolve_experimental_request_user_input_enabled(&cfg);
+        let update_plan_enabled = resolve_update_plan_enabled(&cfg);
         let code_mode = resolve_code_mode_config(&cfg);
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg);
         let token_budget = resolve_token_budget_config(&cfg, &features)?;
@@ -3797,9 +3892,9 @@ impl Config {
         let sqlite_home = cfg
             .sqlite_home
             .as_ref()
-            .map(AbsolutePathBuf::to_path_buf)
+            .cloned()
             .or(sqlite_home_env)
-            .unwrap_or_else(|| codex_home.to_path_buf());
+            .unwrap_or_else(|| codex_home.clone());
         let original_permission_profile = permission_profile.clone();
         apply_requirement_constrained_value(
             "approval_policy",
@@ -3960,6 +4055,7 @@ impl Config {
                 env!("CARGO_PKG_VERSION"),
             ),
             mcp_servers,
+            non_prefixed_mcp_tool_servers,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
             mcp_oauth_credentials_store_mode: resolve_mcp_oauth_credentials_store_mode(
@@ -3993,7 +4089,7 @@ impl Config {
             memories: memories_config,
             agent_interrupt_message_enabled,
             codex_home,
-            sqlite_home,
+            sqlite: codex_state::SqliteConfig::from_sqlite_home(sqlite_home),
             log_dir,
             config_lock_export_dir: cfg
                 .debug
@@ -4071,6 +4167,7 @@ impl Config {
             web_search_mode: constrained_web_search_mode.value,
             web_search_config,
             experimental_request_user_input_enabled,
+            update_plan_enabled,
             code_mode,
             use_experimental_unified_exec_tool,
             background_terminal_max_timeout,

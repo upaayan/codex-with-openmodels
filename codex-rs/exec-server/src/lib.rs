@@ -6,6 +6,7 @@ mod client_api;
 mod client_transport;
 mod connection;
 mod environment;
+mod environment_bootstrap;
 mod environment_provider;
 mod environment_registry;
 mod environment_toml;
@@ -38,6 +39,10 @@ mod websocket_pong_watchdog;
 
 use codex_exec_server_protocol as protocol;
 
+/// Process-local opt-in for tying a remote executor to its parent's stdin pipe.
+pub const CODEX_EXEC_SERVER_EXIT_ON_STDIN_CLOSE_ENV_VAR: &str =
+    "CODEX_EXEC_SERVER_EXIT_ON_STDIN_CLOSE";
+
 pub use arg0_exec_helper::CODEX_ARG0_EXEC_HELPER_ARG1;
 pub use arg0_exec_helper::main as run_arg0_exec_helper_main;
 pub use capability_discovery::CapabilityDiscoveryError;
@@ -46,7 +51,7 @@ pub use capability_discovery_cache::ExecutorCapabilityDiscoveryCache;
 pub use client::ExecServerClient;
 pub use client::ExecServerError;
 pub use client::http_client::HttpResponseBodyStream;
-pub use client::http_client::ReqwestHttpClient;
+pub use client::http_client::RouteAwareHttpClient;
 pub use client_api::ExecServerClientConnectOptions;
 pub use client_api::HttpClient;
 pub use client_api::NoiseRendezvousConnectArgs;
@@ -85,6 +90,7 @@ pub use environment::EnvironmentReadyInfo;
 pub use environment::LOCAL_ENVIRONMENT_ID;
 pub use environment::MAX_SELECTED_CAPABILITY_ROOTS;
 pub use environment::REMOTE_ENVIRONMENT_ID;
+pub use environment_bootstrap::PreparedEnvironmentManager;
 pub use environment_provider::DefaultEnvironmentProvider;
 pub use environment_provider::EnvironmentProvider;
 pub use environment_provider::EnvironmentProviderFuture;
@@ -179,6 +185,7 @@ pub use protocol::WriteResponse;
 pub use protocol::WriteStatus;
 pub use remote::RemoteEnvironmentConfig;
 pub use remote::run_remote_environment;
+pub use remote::run_remote_environment_until_shutdown;
 pub use resolved_capability::ResolvedSelectedCapabilityRoot;
 pub use resolved_capability::SelectedCapabilityRootsStatus;
 pub use runtime_paths::ExecServerRuntimePaths;

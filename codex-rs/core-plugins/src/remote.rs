@@ -3,9 +3,12 @@ use crate::http_client_selector::HttpClientSelector;
 use crate::loader::plugin_app_declarations_from_value;
 use crate::store::PLUGINS_CACHE_DIR;
 use crate::store::PluginStore;
+use chrono::DateTime;
+use chrono::Utc;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginAvailability;
+use codex_app_server_protocol::PluginDisabledReason;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginInstallPolicySource;
 use codex_app_server_protocol::PluginInterface;
@@ -44,6 +47,7 @@ use url::Url;
 
 mod catalog_cache;
 mod remote_installed_plugin_sync;
+mod search;
 mod share;
 
 #[cfg(test)]
@@ -57,6 +61,9 @@ pub use remote_installed_plugin_sync::RemotePluginMaterialization;
 pub use remote_installed_plugin_sync::mark_remote_plugin_cache_mutation_in_flight;
 pub(crate) use remote_installed_plugin_sync::maybe_start_remote_installed_plugin_bundle_sync;
 pub use remote_installed_plugin_sync::sync_remote_installed_plugin_bundles_once;
+pub use search::RemotePluginSearchPage;
+pub use search::RemotePluginSearchRequest;
+pub use search::search_remote_plugins;
 pub use share::RemotePluginShareAccessPolicy;
 pub use share::RemotePluginShareDiscoverability;
 pub use share::RemotePluginSharePrincipal;
@@ -207,12 +214,15 @@ pub struct RemoteInstalledPlugin {
     pub id: String,
     pub version: Option<String>,
     pub name: String,
+    pub installed_at: Option<DateTime<Utc>>,
     pub enabled: bool,
     pub install_policy: PluginInstallPolicy,
     pub install_policy_source: Option<PluginInstallPolicySource>,
     pub must_show_installation_interstitial: Option<bool>,
     pub auth_policy: PluginAuthPolicy,
     pub availability: PluginAvailability,
+    pub disabled_reason: Option<PluginDisabledReason>,
+    pub eligible_plan_types: Option<Vec<String>>,
     pub interface: Option<PluginInterface>,
     pub keywords: Vec<String>,
 }
@@ -226,12 +236,15 @@ pub struct RemotePluginSummary {
     pub name: String,
     pub share_context: Option<RemotePluginShareContext>,
     pub installed: bool,
+    pub installed_at: Option<DateTime<Utc>>,
     pub enabled: bool,
     pub install_policy: PluginInstallPolicy,
     pub install_policy_source: Option<PluginInstallPolicySource>,
     pub must_show_installation_interstitial: Option<bool>,
     pub auth_policy: PluginAuthPolicy,
     pub availability: PluginAvailability,
+    pub disabled_reason: Option<PluginDisabledReason>,
+    pub eligible_plan_types: Option<Vec<String>>,
     pub interface: Option<PluginInterface>,
     pub keywords: Vec<String>,
 }
@@ -245,6 +258,7 @@ pub struct RemotePluginShareContext {
     pub creator_account_user_id: Option<String>,
     pub creator_name: Option<String>,
     pub share_principals: Option<Vec<RemotePluginSharePrincipal>>,
+    pub can_publish_to_workspace: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -481,7 +495,7 @@ impl RemotePluginScope {
         }
     }
 
-    fn from_marketplace_name(name: &str) -> Option<Self> {
+    pub(crate) fn from_marketplace_name(name: &str) -> Option<Self> {
         match name {
             REMOTE_GLOBAL_MARKETPLACE_NAME => Some(Self::Global),
             REMOTE_CREATED_BY_ME_MARKETPLACE_NAME => Some(Self::User),
@@ -628,6 +642,8 @@ struct RemotePluginDirectoryItem {
     share_url: Option<String>,
     #[serde(default)]
     share_principals: Option<Vec<RemotePluginDirectorySharePrincipal>>,
+    #[serde(default)]
+    can_publish_to_workspace: Option<bool>,
     installation_policy: PluginInstallPolicy,
     installation_policy_source: Option<RemotePluginInstallPolicySource>,
     #[serde(default)]
@@ -635,6 +651,10 @@ struct RemotePluginDirectoryItem {
     authentication_policy: PluginAuthPolicy,
     #[serde(rename = "status", default)]
     availability: PluginAvailability,
+    #[serde(default)]
+    disabled_reason: Option<PluginDisabledReason>,
+    #[serde(default)]
+    eligible_plan_types: Option<Vec<String>>,
     release: RemotePluginReleaseResponse,
 }
 
@@ -677,6 +697,8 @@ struct RemotePluginDirectorySharePrincipal {
 struct RemotePluginInstalledItem {
     #[serde(flatten)]
     plugin: RemotePluginDirectoryItem,
+    #[serde(default)]
+    installed_at: Option<DateTime<Utc>>,
     enabled: bool,
     #[serde(default)]
     disabled_skill_names: Vec<String>,
@@ -1192,12 +1214,15 @@ pub fn group_remote_installed_plugins_by_marketplaces(
             name: plugin.name.clone(),
             share_context: None,
             installed: true,
+            installed_at: plugin.installed_at,
             enabled: plugin.enabled,
             install_policy: plugin.install_policy,
             install_policy_source: plugin.install_policy_source,
             must_show_installation_interstitial: plugin.must_show_installation_interstitial,
             auth_policy: plugin.auth_policy,
             availability: plugin.availability,
+            disabled_reason: plugin.disabled_reason,
+            eligible_plan_types: plugin.eligible_plan_types.clone(),
             interface: plugin.interface.clone(),
             keywords: plugin.keywords.clone(),
         };
@@ -1624,6 +1649,7 @@ fn build_remote_plugin_summary(
         name: plugin.name.clone(),
         share_context: remote_plugin_share_context(plugin)?,
         installed: installed_plugin.is_some(),
+        installed_at: installed_plugin.and_then(|installed| installed.installed_at),
         enabled: installed_plugin.is_some_and(|plugin| plugin.enabled),
         install_policy: plugin.installation_policy,
         install_policy_source: plugin
@@ -1632,6 +1658,8 @@ fn build_remote_plugin_summary(
         must_show_installation_interstitial: plugin.must_show_installation_interstitial,
         auth_policy: plugin.authentication_policy,
         availability: plugin.availability,
+        disabled_reason: plugin.disabled_reason,
+        eligible_plan_types: plugin.eligible_plan_types.clone(),
         interface: remote_plugin_interface_to_info(plugin),
         keywords: plugin.release.keywords.clone(),
     })
@@ -1690,6 +1718,7 @@ fn remote_plugin_share_context(
                         })
                         .collect()
                 }),
+                can_publish_to_workspace: plugin.can_publish_to_workspace,
             }))
         }
     }
@@ -1707,6 +1736,7 @@ fn remote_installed_plugin_to_cache_entry(
         id: plugin.id.clone(),
         version: plugin.release.version.clone(),
         name: plugin.name.clone(),
+        installed_at: installed_plugin.installed_at,
         enabled: installed_plugin.enabled,
         install_policy: plugin.installation_policy,
         install_policy_source: plugin
@@ -1715,6 +1745,8 @@ fn remote_installed_plugin_to_cache_entry(
         must_show_installation_interstitial: plugin.must_show_installation_interstitial,
         auth_policy: plugin.authentication_policy,
         availability: plugin.availability,
+        disabled_reason: plugin.disabled_reason,
+        eligible_plan_types: plugin.eligible_plan_types.clone(),
         interface: remote_plugin_interface_to_info(plugin),
         keywords: plugin.release.keywords.clone(),
     })
@@ -1782,11 +1814,15 @@ fn remote_skill_interface_to_info(
             short_description: interface.short_description,
             icon_small: None,
             icon_large: None,
+            icon_small_url: interface.icon_small_url,
+            icon_large_url: interface.icon_large_url,
             brand_color: interface.brand_color,
             default_prompt: interface.default_prompt,
         };
         let has_fields = result.display_name.is_some()
             || result.short_description.is_some()
+            || result.icon_small_url.is_some()
+            || result.icon_large_url.is_some()
             || result.brand_color.is_some()
             || result.default_prompt.is_some();
         has_fields.then_some(result)

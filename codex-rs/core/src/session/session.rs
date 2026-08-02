@@ -1,4 +1,5 @@
 use super::input_queue::InputQueue;
+use super::mcp_refresh::McpRefresh;
 use super::*;
 use crate::agents_md_manager::AgentsMdManager;
 use crate::config::ConstraintError;
@@ -8,6 +9,8 @@ use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillError;
 use crate::state::ActiveTurn;
 use codex_extension_api::ExtensionDataInit;
+use codex_http_client::ClientRouteClass;
+use codex_http_client::RouteAwareClientPool;
 use codex_login::auth::AgentIdentityAuthPolicy;
 use codex_protocol::SessionId;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
@@ -37,18 +40,25 @@ pub(crate) struct Session {
     /// The set of enabled features should be invariant for the lifetime of the
     /// session.
     pub(super) features: ManagedFeatures,
+    pub(crate) windows_sandbox_proxy_settings_mode:
+        codex_sandboxing::WindowsSandboxProxySettingsMode,
     pub(super) multi_agent_version: OnceLock<MultiAgentVersion>,
-    pub(super) mcp_refresh_pending: std::sync::atomic::AtomicBool,
-    /// Serializes runtime refreshes without blocking calls that own a snapshot.
-    pub(super) mcp_refresh_lock: Semaphore,
+    /// Owns invalidation and serializes refreshes without blocking captured calls.
+    pub(super) mcp_refresh: McpRefresh,
     pub(super) mcp_elicitation_reviewer_handle: OnceLock<codex_mcp::ElicitationReviewerHandle>,
     pub(super) mcp_elicitation_lifecycle_handle: OnceLock<codex_mcp::ElicitationLifecycle>,
+    pub(super) mcp_prewarm_tx: async_channel::Sender<()>,
+    pub(super) mcp_prewarm_shutdown: CancellationToken,
+    pub(super) mcp_prewarm_task: std::sync::Mutex<Option<JoinHandle<()>>>,
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
+    pub(crate) pending_user_message_admissions:
+        crate::user_message_admission::PendingUserMessageAdmissions,
     pub(crate) input_queue: InputQueue,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
     pub(super) git_enrichment_policy: GitEnrichmentPolicy,
+    pub(super) fork_persistence: ForkPersistence,
     pub(super) next_internal_sub_id: AtomicU64,
 }
 
@@ -496,6 +506,7 @@ impl Session {
         tx_event: Sender<Event>,
         agent_status: watch::Sender<AgentStatus>,
         mut initial_history: InitialHistory,
+        fork_persistence: ForkPersistence,
         session_source: SessionSource,
         skills_service: Arc<SkillsService>,
         plugins_manager: Arc<PluginsManager>,
@@ -514,6 +525,7 @@ impl Session {
         external_time_provider: Option<Arc<dyn TimeProvider>>,
         multi_agent_version: Option<MultiAgentVersion>,
         git_enrichment_policy: GitEnrichmentPolicy,
+        windows_sandbox_proxy_settings_mode: codex_sandboxing::WindowsSandboxProxySettingsMode,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -625,6 +637,10 @@ impl Session {
                             selected_capability_roots: selected_capability_roots.clone(),
                             multi_agent_version: initial_multi_agent_version,
                             history_mode: session_configuration.history_mode,
+                            history_base: match &fork_persistence {
+                                ForkPersistence::Copied => None,
+                                ForkPersistence::Referenced { history_base, .. } => *history_base,
+                            },
                             subagent_history_start_ordinal: None,
                             initial_window_id: initial_auto_compact_window_ids
                                 .window_id
@@ -640,6 +656,7 @@ impl Session {
                             },
                         };
                         if is_paginated_subagent
+                            && matches!(&fork_persistence, ForkPersistence::Copied)
                             && let InitialHistory::Forked(items) = &initial_history
                         {
                             LiveThread::create_with_inherited_model_context(
@@ -701,6 +718,7 @@ impl Session {
             session_init.ephemeral = config.ephemeral,
         ));
 
+        let mut mcp_auth_changes = auth_manager.auth_change_receiver();
         let auth_manager_clone = Arc::clone(&auth_manager);
         let config_for_mcp = Arc::clone(&config);
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
@@ -938,9 +956,16 @@ impl Session {
                 "session_init.plugin_skill_warmup",
                 otel.name = "session_init.plugin_skill_warmup",
             ));
-            let ((), plugin_skill_errors) = tokio::join!(
+            let thread_name_lookup =
+                thread_title_from_thread_store(live_thread_init.as_ref(), &thread_store, thread_id)
+                    .instrument(info_span!(
+                        "session_init.thread_name_lookup",
+                        otel.name = "session_init.thread_name_lookup",
+                    ));
+            let ((), plugin_skill_errors, thread_name) = tokio::join!(
                 agents_md_manager.refresh(config.as_ref(), &resolved_environments),
                 plugin_skill_warmup,
+                thread_name_lookup,
             );
             for err in &plugin_skill_errors {
                 error!(
@@ -949,13 +974,6 @@ impl Session {
                     err.message
                 );
             }
-            let thread_name =
-                thread_title_from_thread_store(live_thread_init.as_ref(), &thread_store, thread_id)
-                    .instrument(info_span!(
-                        "session_init.thread_name_lookup",
-                        otel.name = "session_init.thread_name_lookup",
-                    ))
-                    .await;
             session_configuration.thread_name = thread_name.clone();
             validate_config_lock_if_configured(&session_configuration).await?;
             export_config_lock_if_configured(&session_configuration, thread_id).await?;
@@ -980,15 +998,11 @@ impl Session {
             } else {
                 None
             };
-            let blocked_request_observer = if managed_network_requirements_configured {
-                config
-                    .permissions
-                    .network
-                    .as_ref()
-                    .map(|_| build_blocked_request_observer(Arc::clone(&network_approval)))
-            } else {
-                None
-            };
+            let blocked_request_observer = config
+                .permissions
+                .network
+                .as_ref()
+                .map(|_| build_blocked_request_observer(Arc::clone(&network_approval)));
             let network_policy_decider =
                 network_policy_decider_session
                     .as_ref()
@@ -1051,6 +1065,8 @@ impl Session {
             let session_extension_data =
                 codex_extension_api::ExtensionData::new(session_id.to_string());
             let mcp_resource_client = Arc::new(McpResourceClient::new(Arc::clone(&mcp_runtime)));
+            let extension_metrics =
+                extension_metrics::from_session_telemetry(session_telemetry.clone());
             for contributor in extensions.thread_lifecycle_contributors() {
                 contributor.on_thread_start(codex_extension_api::ThreadStartInput {
                     config: config.as_ref(),
@@ -1058,11 +1074,16 @@ impl Session {
                     persistent_thread_state_available: state_db_ctx.is_some(),
                     environments: session_configuration.environment_selections(),
                     mcp_resource_client: Some(Arc::clone(&mcp_resource_client)),
+                    extension_metrics: Some(Arc::clone(&extension_metrics)),
                     session_store: &session_extension_data,
                     thread_store: &thread_extension_data,
                 }).await;
             }
 
+            let executed_tool_calls = config
+                .features
+                .enabled(Feature::ExecutedToolCallMetadata)
+                .then(|| Arc::new(crate::state::ExecutedToolCallRecorder::default()));
             let services = SessionServices {
                 // Start with an empty connection set. The initialized set is
                 // published after SessionConfigured so MCP events follow it.
@@ -1080,6 +1101,11 @@ impl Session {
                 show_raw_agent_reasoning: config.show_raw_agent_reasoning,
                 exec_policy,
                 auth_manager: Arc::clone(&auth_manager),
+                openai_file_upload_client_pool: RouteAwareClientPool::new_without_request_logging(
+                    config.http_client_factory(),
+                    ClientRouteClass::Api,
+                )
+                .with_legacy_custom_ca_fallback(),
                 session_telemetry,
                 models_manager: Arc::clone(&models_manager),
                 tool_approvals: Mutex::new(ApprovalStore::default()),
@@ -1135,6 +1161,7 @@ impl Session {
                         session_configuration.parent_thread_id,
                     ),
                 ),
+                executed_tool_calls,
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(
                     Arc::clone(&code_mode_session_provider),
                     &config.features,
@@ -1142,6 +1169,7 @@ impl Session {
                 tool_search_handler_cache: Default::default(),
                 turn_environments: Arc::clone(&turn_environments),
             };
+            let (mcp_prewarm_tx, mcp_prewarm_rx) = async_channel::bounded(1);
             let sess = Arc::new(Session {
                 thread_id,
                 installation_id,
@@ -1150,17 +1178,22 @@ impl Session {
                 state: Mutex::new(state),
                 managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
                 features: config.features.clone(),
+                windows_sandbox_proxy_settings_mode,
                 multi_agent_version,
-                mcp_refresh_pending: std::sync::atomic::AtomicBool::new(false),
-                mcp_refresh_lock: Semaphore::new(/*permits*/ 1),
+                mcp_refresh: McpRefresh::new(),
                 mcp_elicitation_reviewer_handle: OnceLock::new(),
                 mcp_elicitation_lifecycle_handle: OnceLock::new(),
+                mcp_prewarm_tx,
+                mcp_prewarm_shutdown: CancellationToken::new(),
+                mcp_prewarm_task: std::sync::Mutex::new(None),
                 conversation: Arc::new(RealtimeConversationManager::new()),
                 active_turn: Mutex::new(None),
+                pending_user_message_admissions: Default::default(),
                 input_queue: InputQueue::new(),
                 guardian_review_session: GuardianReviewSessionManager::default(),
                 services,
                 git_enrichment_policy,
+                fork_persistence,
                 next_internal_sub_id: AtomicU64::new(0),
             });
             if let Some(network_policy_decider_session) = network_policy_decider_session {
@@ -1205,13 +1238,40 @@ impl Session {
             }
             turn_environments.start_connection_event_forwarding(tx_event.clone());
 
+            let startup_auth_changed = mcp_auth_changes.has_changed().unwrap_or(false);
+            if startup_auth_changed {
+                mcp_auth_changes.mark_unchanged();
+            }
+            let latest_auth = sess.services.auth_manager.auth().await;
+            let mcp_projection = if startup_auth_changed
+                || mcp_auth_changes.has_changed().unwrap_or(false)
+            {
+                sess.services
+                    .plugins_manager
+                    .set_auth_mode(latest_auth.as_ref().map(CodexAuth::api_auth_mode));
+                sess.services
+                    .mcp_manager
+                    .runtime_config_for_step(
+                        config.as_ref(),
+                        &sess.services.mcp_thread_init,
+                        &sess.services.thread_extension_data,
+                        &session_configuration.originator,
+                        /*ready_selected_capability_roots*/ &[],
+                        /*executor_capability_discovery*/ None,
+                    )
+                    .await
+            } else {
+                mcp_projection
+            };
             sess.install_initial_mcp_runtime(
                 &session_configuration,
+                latest_auth,
                 mcp_projection,
                 &resolved_environments,
                 mcp_runtime_cwd,
             )
             .await?;
+            sess.start_mcp_prewarm_worker(mcp_prewarm_rx, mcp_auth_changes);
             sess.schedule_startup_prewarm(session_configuration.base_instructions.clone())
                 .await;
             let session_start_source = match &initial_history {
@@ -1224,6 +1284,10 @@ impl Session {
 
             // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
             Box::pin(sess.record_initial_history(initial_history)).await;
+            if matches!(&sess.fork_persistence, ForkPersistence::Referenced { .. }) {
+                // Keep the source reserved until the child's history reference is durable.
+                sess.try_ensure_rollout_materialized().await?;
+            }
             {
                 let mut state = sess.state.lock().await;
                 state.queue_pending_session_start_source(session_start_source);

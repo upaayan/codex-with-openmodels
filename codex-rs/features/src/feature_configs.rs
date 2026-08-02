@@ -31,6 +31,46 @@ impl FeatureConfig for CodeModeConfigToml {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct CodeModeHostConfigToml {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// Keep code mode fail-closed when the standalone host is unavailable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disable_in_process_fallback: Option<bool>,
+}
+
+impl FeatureConfig for CodeModeHostConfigToml {
+    fn enabled(&self) -> Option<bool> {
+        self.enabled
+    }
+
+    fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = Some(enabled);
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NonPrefixedMcpToolNamesConfigToml {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// MCP servers whose tools should omit the legacy `mcp__` namespace prefix.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_names: Option<Vec<String>>,
+}
+
+impl FeatureConfig for NonPrefixedMcpToolNamesConfigToml {
+    fn enabled(&self) -> Option<bool> {
+        self.enabled
+    }
+
+    fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = Some(enabled);
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct MultiAgentV2ConfigToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
@@ -55,6 +95,9 @@ pub struct MultiAgentV2ConfigToml {
     pub root_agent_usage_hint_text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subagent_usage_hint_text: Option<String>,
+    /// Overrides inherited developer instructions for subagents without role-specific instructions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subagent_developer_instructions: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub multi_agent_mode_hint_text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

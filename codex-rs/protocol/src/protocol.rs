@@ -111,6 +111,8 @@ pub const SKILLS_INSTRUCTIONS_OPEN_TAG: &str = "<skills_instructions>";
 pub const SKILLS_INSTRUCTIONS_CLOSE_TAG: &str = "</skills_instructions>";
 pub const PLUGINS_INSTRUCTIONS_OPEN_TAG: &str = "<plugins_instructions>";
 pub const PLUGINS_INSTRUCTIONS_CLOSE_TAG: &str = "</plugins_instructions>";
+pub const TOOLS_OPEN_TAG: &str = "<tools>";
+pub const TOOLS_CLOSE_TAG: &str = "</tools>";
 pub const COLLABORATION_MODE_OPEN_TAG: &str = "<collaboration_mode>";
 pub const COLLABORATION_MODE_CLOSE_TAG: &str = "</collaboration_mode>";
 pub const MULTI_AGENT_MODE_OPEN_TAG: &str = "<multi_agent_mode>";
@@ -180,6 +182,8 @@ pub struct Submission {
     pub client_user_message_id: Option<String>,
     /// Optional W3C trace carrier propagated across async submission handoffs.
     pub trace: Option<W3cTraceContext>,
+    /// Core-provided ID of the parent turn that directly initiated this submission.
+    pub parent_turn_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -192,18 +196,13 @@ pub struct W3cTraceContext {
     pub tracestate: Option<String>,
 }
 
-/// Resolved MCP inputs to apply through a thread's submission queue.
-#[derive(Debug, Clone, PartialEq)]
-pub struct McpServerRefreshConfig {
-    pub mcp_servers: Value,
-    pub mcp_oauth_credentials_store_mode: Value,
-    pub auth_keyring_backend_kind: Value,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConversationStartParams {
     /// Whether Codex response handoffs are managed through explicit client append calls.
     pub client_managed_handoffs: bool,
+    /// Whether a realtime V3 delegation produces an acknowledgement filler.
+    /// `None` preserves the Realtime API's default behavior.
+    pub delegation_ack_filler: Option<bool>,
     /// Whether to route any remaining transcript tail through Codex when the session ends.
     /// TODO: Remove this rollout knob once transcript-tail flushing is always enabled.
     pub flush_transcript_tail_on_session_end: bool,
@@ -224,6 +223,10 @@ pub struct ConversationStartParams {
     pub include_startup_context: bool,
     /// Complete role-bearing text items to include in the initial realtime session history.
     pub initial_items: Vec<ConversationTextParams>,
+    /// Developer instructions given to Codex when this realtime session starts.
+    pub realtime_start_instructions: Option<String>,
+    /// Developer instructions given to Codex when this realtime session ends.
+    pub realtime_end_instructions: Option<String>,
     pub prompt: Option<Option<String>>,
     pub realtime_session_id: Option<String>,
     pub transport: Option<ConversationStartTransport>,
@@ -641,9 +644,6 @@ pub enum Op {
     /// Request MCP servers to reinitialize and refresh cached tool lists.
     RefreshMcpServers,
 
-    /// Replace the thread's resolved MCP configuration before its next turn.
-    ReloadMcpConfig { config: McpServerRefreshConfig },
-
     /// Reload user config layer overrides for the active session.
     ///
     /// This updates runtime config-derived behavior (for example app
@@ -884,7 +884,6 @@ impl Op {
             Self::RequestPermissionsResponse { .. } => "request_permissions_response",
             Self::DynamicToolResponse { .. } => "dynamic_tool_response",
             Self::RefreshMcpServers => "refresh_mcp_servers",
-            Self::ReloadMcpConfig { .. } => "reload_mcp_config",
             Self::ReloadUserConfig => "reload_user_config",
             Self::Compact => "compact",
             Self::SetThreadMemoryMode { .. } => "set_thread_memory_mode",
@@ -1849,6 +1848,9 @@ pub struct ItemCompletedEvent {
     pub thread_id: ThreadId,
     pub turn_id: String,
     pub item: TurnItem,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub started_at_ms: Option<i64>,
     // Old rollout files may contain ItemCompleted events for PlanItem without
     // this field. Default to 0 so those persisted rollouts still deserialize
     // after tightening the core event contract.
@@ -2435,6 +2437,10 @@ pub struct McpToolCallBeginEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub plugin_id: Option<String>,
+    /// Whether the selected tool is annotated as read-only, not its execution outcome.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub read_only_hint: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]
@@ -2460,6 +2466,9 @@ pub struct McpToolCallEndEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub plugin_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub read_only_hint: Option<bool>,
     #[ts(type = "string")]
     pub duration: Duration,
     /// Result of the tool call. Note this could be an error.
@@ -3516,6 +3525,14 @@ pub enum ExecCommandStatus {
 pub struct ExecCommandBeginEvent {
     /// Identifier so this can be paired with the ExecCommandEnd event.
     pub call_id: String,
+    /// Trusted first-party plugin attributed to this command, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub plugin_id: Option<String>,
+    /// Safe plugin-relative path attributed to this command, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub script_path: Option<String>,
     /// Identifier for the underlying PTY process (when available).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -3542,6 +3559,14 @@ pub struct ExecCommandBeginEvent {
 pub struct ExecCommandEndEvent {
     /// Identifier for the ExecCommandBegin that finished.
     pub call_id: String,
+    /// Trusted first-party plugin attributed to this command, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub plugin_id: Option<String>,
+    /// Safe plugin-relative path attributed to this command, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub script_path: Option<String>,
     /// Identifier for the underlying PTY process (when available).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -3759,6 +3784,7 @@ pub struct McpStartupFailure {
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
 pub enum McpAuthStatus {
+    Unknown,
     Unsupported,
     NotLoggedIn,
     BearerToken,
@@ -3768,6 +3794,7 @@ pub enum McpAuthStatus {
 impl fmt::Display for McpAuthStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let text = match self {
+            McpAuthStatus::Unknown => "Unknown",
             McpAuthStatus::Unsupported => "Unsupported",
             McpAuthStatus::NotLoggedIn => "Not logged in",
             McpAuthStatus::BearerToken => "Bearer token",
@@ -5295,6 +5322,7 @@ mod tests {
                 app_name: Some("Calendar".into()),
                 action_name: Some("create_event".into()),
                 plugin_id: Some("sample@test".into()),
+                read_only_hint: Some(false),
                 status: McpToolCallStatus::InProgress,
                 result: None,
                 error: None,
@@ -5318,6 +5346,7 @@ mod tests {
                 assert_eq!(event.app_name.as_deref(), Some("Calendar"));
                 assert_eq!(event.action_name.as_deref(), Some("create_event"));
                 assert_eq!(event.plugin_id.as_deref(), Some("sample@test"));
+                assert_eq!(event.read_only_hint, Some(false));
             }
             _ => panic!("expected McpToolCallBegin event"),
         }
@@ -5335,6 +5364,7 @@ mod tests {
                 result: "Zm9v".into(),
                 saved_path: Some(test_path_buf("/tmp/ig-1.png").abs()),
             }),
+            started_at_ms: Some(0),
             completed_at_ms: 0,
         };
 
@@ -5360,6 +5390,7 @@ mod tests {
         let event = ItemCompletedEvent {
             thread_id: ThreadId::new(),
             turn_id: "turn-1".into(),
+            started_at_ms: Some(0),
             completed_at_ms: 0,
             item: TurnItem::FileChange(FileChangeItem {
                 id: "patch-1".into(),
@@ -5398,6 +5429,7 @@ mod tests {
         let event = ItemCompletedEvent {
             thread_id: ThreadId::new(),
             turn_id: "turn-1".into(),
+            started_at_ms: Some(0),
             completed_at_ms: 0,
             item: TurnItem::McpToolCall(McpToolCallItem {
                 id: "mcp-1".into(),
@@ -5410,6 +5442,7 @@ mod tests {
                 app_name: Some("Calendar".into()),
                 action_name: Some("create_event".into()),
                 plugin_id: Some("sample@test".into()),
+                read_only_hint: None,
                 status: McpToolCallStatus::Completed,
                 result: Some(CallToolResult {
                     content: vec![json!({"type": "text", "text": "ok"})],
@@ -5454,6 +5487,8 @@ mod tests {
             started_at_ms: 10,
             item: TurnItem::CommandExecution(CommandExecutionItem {
                 id: "exec-1".into(),
+                plugin_id: Some("sample@openai-curated".into()),
+                script_path: Some("scripts/run.py".into()),
                 process_id: Some("pid-1".into()),
                 command: vec!["echo".into(), "done".into()],
                 cwd: cwd.clone(),
@@ -5474,9 +5509,12 @@ mod tests {
         let completed = ItemCompletedEvent {
             thread_id: ThreadId::new(),
             turn_id: "turn-1".into(),
+            started_at_ms: Some(10),
             completed_at_ms: 20,
             item: TurnItem::CommandExecution(CommandExecutionItem {
                 id: "exec-1".into(),
+                plugin_id: Some("sample@openai-curated".into()),
+                script_path: Some("scripts/run.py".into()),
                 process_id: Some("pid-1".into()),
                 command: vec!["echo".into(), "done".into()],
                 cwd,
@@ -5499,10 +5537,15 @@ mod tests {
             started.as_legacy_events(/*show_raw_agent_reasoning*/ false).as_slice(),
             [EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
                 call_id,
+                plugin_id,
+                script_path,
                 turn_id,
                 started_at_ms: 10,
                 ..
-            })] if call_id == "exec-1" && turn_id == "turn-1"
+            })] if call_id == "exec-1"
+                && plugin_id.as_deref() == Some("sample@openai-curated")
+                && script_path.as_deref() == Some("scripts/run.py")
+                && turn_id == "turn-1"
         ));
         assert!(matches!(
             completed
@@ -5510,11 +5553,17 @@ mod tests {
                 .as_slice(),
             [EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id,
+                plugin_id,
+                script_path,
                 turn_id,
                 completed_at_ms: 20,
                 aggregated_output,
                 ..
-            })] if call_id == "exec-1" && turn_id == "turn-1" && aggregated_output == "done\n"
+            })] if call_id == "exec-1"
+                && plugin_id.as_deref() == Some("sample@openai-curated")
+                && script_path.as_deref() == Some("scripts/run.py")
+                && turn_id == "turn-1"
+                && aggregated_output == "done\n"
         ));
     }
 
@@ -5539,6 +5588,7 @@ mod tests {
         let completed = ItemCompletedEvent {
             thread_id: ThreadId::new(),
             turn_id: "turn-1".into(),
+            started_at_ms: Some(10),
             completed_at_ms: 20,
             item: TurnItem::DynamicToolCall(DynamicToolCallItem {
                 id: "dynamic-1".into(),
@@ -5583,6 +5633,7 @@ mod tests {
         let entered = ItemCompletedEvent {
             thread_id: ThreadId::new(),
             turn_id: "turn-1".into(),
+            started_at_ms: Some(0),
             completed_at_ms: 0,
             item: TurnItem::EnteredReviewMode(EnteredReviewModeItem {
                 id: "entered-review".into(),
@@ -5595,6 +5646,7 @@ mod tests {
         let exited = ItemCompletedEvent {
             thread_id: ThreadId::new(),
             turn_id: "turn-1".into(),
+            started_at_ms: Some(0),
             completed_at_ms: 0,
             item: TurnItem::ExitedReviewMode(ExitedReviewModeItem {
                 id: "exited-review".into(),
@@ -5655,12 +5707,14 @@ mod tests {
             thread_id: ThreadId::new(),
             turn_id: "turn-1".into(),
             item: TurnItem::UserMessage(UserMessageItem::new(&[])),
+            started_at_ms: None,
             completed_at_ms: 123,
         })
         .unwrap();
         value.as_object_mut().unwrap().remove("completed_at_ms");
 
         let event = serde_json::from_value::<ItemCompletedEvent>(value).unwrap();
+        assert_eq!(event.started_at_ms, None);
         assert_eq!(event.completed_at_ms, 0);
     }
 

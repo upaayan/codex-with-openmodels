@@ -8,13 +8,16 @@ use super::session::SessionConfiguration;
 use super::*;
 use crate::mcp::McpRuntimeProjection;
 use codex_mcp::ElicitationReviewerHandle;
+use codex_mcp::PreparedMcpCall;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 
 pub(super) struct McpDesiredState {
     pub(super) config: Arc<Config>,
+    pub(super) auth: Option<CodexAuth>,
     pub(super) submit_id: String,
     pub(super) originator: String,
     pub(super) environments: TurnEnvironmentSnapshot,
+    pub(super) windows_sandbox_level: WindowsSandboxLevel,
 }
 
 impl McpDesiredState {
@@ -28,7 +31,33 @@ impl McpDesiredState {
 }
 
 impl Session {
-    pub(super) async fn latest_mcp_desired_state(&self) -> McpDesiredState {
+    /// Waits on this session's refreshed server before tool execution is admitted.
+    pub(crate) async fn wait_for_mcp_server(self: &Arc<Self>, server: &str) {
+        self.refresh_mcp_if_dirty().await;
+        self.services
+            .mcp_runtime
+            .wait_for_server_startup(server)
+            .await;
+    }
+
+    /// Captures this session's current MCP client and catalog for one tool call.
+    pub(crate) async fn prepare_mcp_call(
+        self: &Arc<Self>,
+        server: &str,
+        tool: &str,
+    ) -> Option<PreparedMcpCall> {
+        self.refresh_mcp_if_dirty().await;
+        self.services
+            .mcp_runtime
+            .current_binding_for_call(server)
+            .await?
+            .prepare_call(server, tool)
+    }
+
+    pub(super) async fn latest_mcp_desired_state(
+        &self,
+        auth: Option<CodexAuth>,
+    ) -> McpDesiredState {
         let session_configuration = {
             let state = self.state.lock().await;
             state.session_configuration.clone()
@@ -43,15 +72,18 @@ impl Session {
 
         McpDesiredState {
             config: Arc::new(config),
+            auth,
             submit_id: self.next_internal_sub_id(),
             originator: session_configuration.originator.clone(),
             environments,
+            windows_sandbox_level: session_configuration.windows_sandbox_level,
         }
     }
 
     pub(super) async fn install_initial_mcp_runtime(
         self: &Arc<Self>,
         session_configuration: &SessionConfiguration,
+        auth: Option<CodexAuth>,
         mcp_projection: McpRuntimeProjection,
         resolved_environments: &TurnEnvironmentSnapshot,
         local_stdio_fallback_cwd: PathBuf,
@@ -62,9 +94,11 @@ impl Session {
         config.permissions.approval_policy = session_configuration.approval_policy.clone();
         let desired = McpDesiredState {
             config: Arc::new(config),
+            auth,
             submit_id: INITIAL_SUBMIT_ID.to_owned(),
             originator: session_configuration.originator.clone(),
             environments: resolved_environments.clone(),
+            windows_sandbox_level: session_configuration.windows_sandbox_level,
         };
         self.publish_mcp_runtime(
             &desired,
@@ -89,25 +123,23 @@ impl Session {
         ready_selected_capability_roots: &[SelectedCapabilityRoot],
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) {
-        let input = self
-            .build_mcp_runtime_input(
-                desired,
-                mcp_projection,
-                ready_selected_capability_roots,
-                elicitation_reviewer,
-            )
-            .await;
+        let input = self.build_mcp_runtime_input(
+            desired,
+            mcp_projection,
+            ready_selected_capability_roots,
+            elicitation_reviewer,
+        );
         self.services.mcp_runtime.replace(input).await;
     }
 
-    async fn build_mcp_runtime_input(
+    pub(super) fn build_mcp_runtime_input(
         &self,
         desired: &McpDesiredState,
         mcp_projection: McpRuntimeProjection,
         ready_selected_capability_roots: &[SelectedCapabilityRoot],
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) -> McpRuntimeInput {
-        let auth = self.services.auth_manager.auth().await;
+        let auth = desired.auth.clone();
         let supports_openai_form_elicitation = self
             .services
             .supports_openai_form_elicitation
