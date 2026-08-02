@@ -366,6 +366,377 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(events[-1]["type"], "response.completed")
         self.assertEqual(events[-1]["response"]["usage"]["total_tokens"], 15)
 
+    def test_emits_full_reasoning_as_responses_reasoning_item(self) -> None:
+        _request, bindings = responses_to_chat_request(self.request(), self.model)
+        reasoning = "Inspect the repository, then verify the smallest safe change."
+
+        events = response_events(
+            chat_response_to_sse(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "reasoning_content": reasoning,
+                                "content": "I will inspect the repository.",
+                            }
+                        }
+                    ]
+                },
+                bindings,
+            )
+        )
+        items = [
+            event["item"]
+            for event in events
+            if event["type"] == "response.output_item.done"
+        ]
+
+        self.assertEqual([item["type"] for item in items], ["reasoning", "message"])
+        reasoning_item = dict(items[0])
+        reasoning_id = reasoning_item.pop("id")
+        self.assertIsInstance(reasoning_id, str)
+        self.assertTrue(reasoning_id.startswith("rs_sudhir_"))
+        self.assertEqual(
+            reasoning_item,
+            {
+                "type": "reasoning",
+                "summary": [],
+                "content": [{"type": "reasoning_text", "text": reasoning}],
+                "encrypted_content": None,
+            },
+        )
+
+    def test_reasoning_aliases_emit_one_canonical_item_without_duplicates(self) -> None:
+        _request, bindings = responses_to_chat_request(self.request(), self.model)
+        cases = (
+            ({"reasoning": "reasoning alias"}, "reasoning alias"),
+            ({"reasoning_text": "reasoning-text alias"}, "reasoning-text alias"),
+            (
+                {
+                    "reasoning_content": "",
+                    "reasoning": "first nonempty reasoning",
+                    "reasoning_text": "later reasoning text",
+                },
+                "first nonempty reasoning",
+            ),
+            (
+                {
+                    "reasoning_content": "preferred reasoning",
+                    "reasoning": "duplicate reasoning",
+                    "reasoning_text": "duplicate reasoning text",
+                },
+                "preferred reasoning",
+            ),
+        )
+
+        for aliases, expected in cases:
+            with self.subTest(aliases=aliases):
+                events = response_events(
+                    chat_response_to_sse(
+                        {
+                            "choices": [
+                                {
+                                    "message": {
+                                        "role": "assistant",
+                                        "content": "Done.",
+                                        **aliases,
+                                    }
+                                }
+                            ]
+                        },
+                        bindings,
+                    )
+                )
+                reasoning_items = [
+                    event["item"]
+                    for event in events
+                    if event.get("item", {}).get("type") == "reasoning"
+                ]
+
+                self.assertEqual(len(reasoning_items), 1)
+                self.assertEqual(
+                    reasoning_items[0]["content"],
+                    [{"type": "reasoning_text", "text": expected}],
+                )
+
+    def test_replays_reasoning_alias_for_generic_and_opencode_routes(self) -> None:
+        cases = (
+            ("demo", "demo/model", "reasoning", "reasoning", None),
+            ("demo", "demo/model", "reasoning_text", "reasoning_text", None),
+            (
+                "opencode-go",
+                "deepseek-v4-flash",
+                "reasoning",
+                "reasoning_content",
+                None,
+            ),
+        )
+
+        for provider_id, model_id, source_field, replay_field, compat in cases:
+            with self.subTest(
+                provider_id=provider_id,
+                source_field=source_field,
+            ):
+                model = self.load_model(provider_id, model_id, compat=compat)
+                request = self.request()
+                _chat, bindings = responses_to_chat_request(request, model)
+                shell_name = next(
+                    binding.encoded_name
+                    for binding in bindings.bindings
+                    if binding.qualified_name == "shell_command"
+                )
+                reasoning = f"reasoning from {source_field}"
+                events = response_events(
+                    chat_response_to_sse(
+                        {
+                            "choices": [
+                                {
+                                    "message": {
+                                        "role": "assistant",
+                                        "content": "Done.",
+                                        source_field: reasoning,
+                                        "tool_calls": [
+                                            {
+                                                "id": "call-1",
+                                                "type": "function",
+                                                "function": {
+                                                    "name": shell_name,
+                                                    "arguments": '{"command":"pwd"}',
+                                                },
+                                            }
+                                        ],
+                                    }
+                                }
+                            ]
+                        },
+                        bindings,
+                    )
+                )
+                output_items = [
+                    event["item"]
+                    for event in events
+                    if event["type"] == "response.output_item.done"
+                ]
+                reasoning_item = next(
+                    item for item in output_items if item["type"] == "reasoning"
+                )
+                self.assertIsNone(reasoning_item["encrypted_content"])
+                request["input"] = [
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "Work"}],
+                    },
+                    *output_items,
+                    {
+                        "type": "function_call_output",
+                        "call_id": "call-1",
+                        "output": "/tmp/project",
+                    },
+                ]
+
+                replayed, _bindings = responses_to_chat_request(request, model)
+                assistants = [
+                    message
+                    for message in replayed["messages"]
+                    if message["role"] == "assistant"
+                ]
+                self.assertEqual(len(assistants), 1)
+                assistant = assistants[0]
+
+                self.assertEqual(assistant["content"], "Done.")
+                self.assertEqual(assistant["tool_calls"][0]["id"], "call-1")
+                self.assertEqual(assistant[replay_field], reasoning)
+                if replay_field != source_field:
+                    self.assertNotIn(source_field, assistant)
+
+    def test_replays_reasoning_item_as_reasoning_content_for_deepseek_routes(
+        self,
+    ) -> None:
+        reasoning = "The table exists, so inspect its schema before continuing."
+        input_items = [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Create the table"}],
+            },
+            {
+                "type": "reasoning",
+                "id": "rs_test",
+                "summary": [],
+                "content": [{"type": "reasoning_text", "text": reasoning}],
+                "encrypted_content": None,
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "I will inspect the table schema.",
+                    }
+                ],
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Continue"}],
+            },
+        ]
+        routes = (
+            (
+                "deepseek",
+                {
+                    "requiresReasoningContentOnAssistantMessages": True,
+                    "thinkingFormat": "deepseek",
+                },
+            ),
+            ("opencode-go", None),
+        )
+
+        for provider_id, compat in routes:
+            with self.subTest(provider_id=provider_id):
+                model = self.load_model(
+                    provider_id,
+                    "deepseek-v4-flash",
+                    compat=compat,
+                )
+                request = self.request()
+                request["input"] = input_items
+
+                chat, _bindings = responses_to_chat_request(request, model)
+                assistant_messages = [
+                    message
+                    for message in chat["messages"]
+                    if message["role"] == "assistant"
+                ]
+
+                self.assertEqual(len(assistant_messages), 1)
+                self.assertEqual(
+                    assistant_messages[0]["reasoning_content"],
+                    reasoning,
+                )
+
+    def test_replays_reasoning_on_tool_call_message_once(self) -> None:
+        model = self.load_model(
+            "deepseek",
+            "deepseek-v4-flash",
+            compat={
+                "requiresReasoningContentOnAssistantMessages": True,
+                "thinkingFormat": "deepseek",
+            },
+        )
+        request = self.request()
+        reasoning = "The table exists, so inspect its schema before continuing."
+        _chat, bindings = responses_to_chat_request(request, model)
+        shell_name = next(
+            binding.encoded_name
+            for binding in bindings.bindings
+            if binding.qualified_name == "shell_command"
+        )
+        events = response_events(
+            chat_response_to_sse(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "reasoning_content": reasoning,
+                                "content": "I will inspect the table schema.",
+                                "tool_calls": [
+                                    {
+                                        "id": "call-1",
+                                        "type": "function",
+                                        "function": {
+                                            "name": shell_name,
+                                            "arguments": (
+                                                '{"command":"aws dynamodb '
+                                                'describe-table"}'
+                                            ),
+                                        },
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                },
+                bindings,
+            )
+        )
+        output_items = [
+            event["item"]
+            for event in events
+            if event["type"] == "response.output_item.done"
+        ]
+        self.assertEqual(
+            [item["type"] for item in output_items],
+            ["reasoning", "message", "function_call"],
+        )
+        request["input"] = [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Create the table"}],
+            },
+            *output_items,
+            {
+                "type": "function_call_output",
+                "call_id": "call-1",
+                "output": '{"TableStatus":"ACTIVE"}',
+            },
+        ]
+
+        chat, _bindings = responses_to_chat_request(request, model)
+        assistant_messages = [
+            message
+            for message in chat["messages"]
+            if message["role"] == "assistant"
+        ]
+        self.assertEqual(len(assistant_messages), 1)
+        tool_call_message = next(
+            message for message in assistant_messages if message.get("tool_calls")
+        )
+
+        self.assertEqual(
+            tool_call_message["content"],
+            "I will inspect the table schema.",
+        )
+        self.assertEqual(tool_call_message["reasoning_content"], reasoning)
+        self.assertEqual(
+            sum(
+                message.get("reasoning_content") == reasoning
+                for message in assistant_messages
+            ),
+            1,
+        )
+
+    def test_maps_reasoning_token_usage_to_responses_details(self) -> None:
+        _request, bindings = responses_to_chat_request(self.request(), self.model)
+
+        events = response_events(
+            chat_response_to_sse(
+                {
+                    "choices": [{"message": {"content": "Done."}}],
+                    "usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 17,
+                        "completion_tokens_details": {"reasoning_tokens": 13},
+                        "total_tokens": 27,
+                    },
+                },
+                bindings,
+            )
+        )
+        usage = events[-1]["response"]["usage"]
+
+        self.assertEqual(usage["output_tokens"], 17)
+        self.assertEqual(
+            usage["output_tokens_details"],
+            {"reasoning_tokens": 13},
+        )
+
+
     def test_preserves_tool_history_for_next_chat_turn(self) -> None:
         request = self.request()
         request["input"] = [
@@ -401,6 +772,71 @@ class AdapterTests(unittest.TestCase):
             "call-1",
         )
         self.assertEqual(chat["messages"][3]["tool_call_id"], "call-1")
+
+    def test_history_only_exec_command_is_serializable_but_not_callable(
+        self,
+    ) -> None:
+        request = self.request()
+        request["tools"] = []
+        request["input"] = [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Run pwd"}],
+            },
+            {
+                "type": "function_call",
+                "call_id": "call-history",
+                "name": "exec_command",
+                "arguments": '{"cmd":"pwd"}',
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call-history",
+                "output": "/tmp/project",
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Continue"}],
+            },
+        ]
+
+        chat, bindings = responses_to_chat_request(request, self.model)
+
+        self.assertNotIn("tools", chat)
+        self.assertNotIn("tool_choice", chat)
+        self.assertEqual(
+            [message["role"] for message in chat["messages"]],
+            ["system", "user", "assistant", "tool", "user"],
+        )
+        history_call = chat["messages"][2]["tool_calls"][0]
+        self.assertEqual(history_call["id"], "call-history")
+        self.assertEqual(chat["messages"][3]["tool_call_id"], "call-history")
+
+        with self.assertRaisesRegex(GatewayError, "unknown translated tool"):
+            chat_response_to_sse(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": None,
+                                "tool_calls": [
+                                    {
+                                        "id": "call-new",
+                                        "type": "function",
+                                        "function": {
+                                            "name": history_call["function"]["name"],
+                                            "arguments": '{"cmd":"whoami"}',
+                                        },
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                },
+                bindings,
+            )
 
     def test_six_agent_calls_are_emitted_in_one_response(self) -> None:
         _request, bindings = responses_to_chat_request(self.request(), self.model)

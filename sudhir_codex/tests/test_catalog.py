@@ -161,6 +161,7 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(info["apply_patch_tool_type"], "freeform")
         self.assertTrue(info["supports_parallel_tool_calls"])
         self.assertEqual(info["input_modalities"], ["text", "image"])
+        self.assertNotIn("comp_hash", info)
 
     def test_known_routes_advertise_only_real_reasoning_controls(self) -> None:
         document = {

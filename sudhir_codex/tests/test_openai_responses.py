@@ -6,6 +6,7 @@ from pathlib import Path
 from helpers import make_repo
 from helpers import write_json
 from sudhir_codex_gateway.catalog import CatalogLoader
+from sudhir_codex_gateway.errors import GatewayError
 from sudhir_codex_gateway.openai_responses import openai_response_to_sse
 from sudhir_codex_gateway.openai_responses import responses_to_openai_request
 
@@ -289,6 +290,99 @@ class OpenAIResponsesTests(unittest.TestCase):
             ],
         )
         self.assertIsInstance(upstream["input"][-1]["output"], str)
+
+    def test_history_only_exec_command_is_serializable_but_not_callable(
+        self,
+    ) -> None:
+        request = self.request()
+        request["tools"] = []
+        request["input"] = [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Run pwd"}],
+            },
+            {
+                "type": "function_call",
+                "id": "fc_history",
+                "call_id": "call-history",
+                "name": "exec_command",
+                "arguments": '{"cmd":"pwd"}',
+                "status": "completed",
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call-history",
+                "output": "/tmp/project",
+            },
+        ]
+
+        upstream, bindings = responses_to_openai_request(request, self.model)
+
+        self.assertNotIn("tools", upstream)
+        self.assertNotIn("tool_choice", upstream)
+        history_call = next(
+            item for item in upstream["input"] if item.get("type") == "function_call"
+        )
+        self.assertEqual(history_call["call_id"], "call-history")
+        self.assertEqual(
+            upstream["input"][-1],
+            {
+                "type": "function_call_output",
+                "call_id": "call-history",
+                "output": "/tmp/project",
+            },
+        )
+
+        with self.assertRaisesRegex(GatewayError, "unknown translated tool"):
+            openai_response_to_sse(
+                {
+                    "id": "resp_history_only",
+                    "status": "completed",
+                    "output": [
+                        {
+                            "type": "function_call",
+                            "id": "fc_new",
+                            "call_id": "call-new",
+                            "name": history_call["name"],
+                            "arguments": '{"cmd":"whoami"}',
+                            "status": "completed",
+                        }
+                    ],
+                },
+                bindings,
+            )
+
+    def test_historical_discovered_tools_require_active_tool_search(self) -> None:
+        request = self.request()
+        request["tools"] = []
+        request["input"] = [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Search tools"}],
+            },
+            {
+                "type": "tool_search_call",
+                "id": "fc_search_history",
+                "call_id": "call-search-history",
+                "status": "completed",
+                "execution": "client",
+                "arguments": {"query": "spawn agent"},
+            },
+            {
+                "type": "tool_search_output",
+                "call_id": "call-search-history",
+                "status": "completed",
+                "execution": "client",
+                "tools": [self.request()["tools"][2]],
+            },
+        ]
+
+        upstream, _bindings = responses_to_openai_request(request, self.model)
+
+        self.assertNotIn("tools", upstream)
+        self.assertNotIn("tool_choice", upstream)
 
 
 if __name__ == "__main__":

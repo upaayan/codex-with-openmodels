@@ -137,6 +137,8 @@ def anthropic_response_to_chat(response: object) -> dict[str, Any]:
         )
 
     text_parts: list[str] = []
+    thinking_parts: list[str] = []
+    thinking_signature: str | None = None
     tool_calls: list[dict[str, Any]] = []
     for block in content:
         if not isinstance(block, dict):
@@ -144,6 +146,11 @@ def anthropic_response_to_chat(response: object) -> dict[str, Any]:
         block_type = block.get("type")
         if block_type == "text" and isinstance(block.get("text"), str):
             text_parts.append(block["text"])
+        elif block_type == "thinking" and isinstance(block.get("thinking"), str):
+            thinking_parts.append(block["thinking"])
+            signature = block.get("signature")
+            if thinking_signature is None and isinstance(signature, str) and signature:
+                thinking_signature = signature
         elif block_type == "tool_use":
             name = block.get("name")
             if not isinstance(name, str) or not name:
@@ -171,6 +178,10 @@ def anthropic_response_to_chat(response: object) -> dict[str, Any]:
         "role": "assistant",
         "content": "".join(text_parts) or None,
     }
+    if thinking_parts:
+        message["reasoning_content"] = "".join(thinking_parts)
+    if thinking_signature:
+        message["reasoning_signature"] = thinking_signature
     if tool_calls:
         message["tool_calls"] = tool_calls
 
@@ -201,7 +212,15 @@ def _assistant_blocks(
     message: dict[str, Any],
     tool_ids: dict[str, str],
 ) -> list[dict[str, Any]]:
-    blocks = _text_blocks(message.get("content"))
+    blocks: list[dict[str, Any]] = []
+    reasoning = message.get("reasoning_content")
+    if isinstance(reasoning, str) and reasoning:
+        thinking_block = {"type": "thinking", "thinking": reasoning}
+        signature = message.get("reasoning_signature")
+        if isinstance(signature, str) and signature:
+            thinking_block["signature"] = signature
+        blocks.append(thinking_block)
+    blocks.extend(_text_blocks(message.get("content")))
     calls = message.get("tool_calls")
     if calls is None and isinstance(message.get("function_call"), dict):
         calls = [
@@ -379,7 +398,18 @@ def _append_message(
     blocks: list[dict[str, Any]],
 ) -> None:
     if messages and messages[-1]["role"] == role:
-        messages[-1]["content"].extend(blocks)
+        combined = [*messages[-1]["content"], *blocks]
+        if role == "assistant":
+            combined = [
+                *(block for block in combined if block.get("type") == "thinking"),
+                *(block for block in combined if block.get("type") == "text"),
+                *(
+                    block
+                    for block in combined
+                    if block.get("type") not in {"thinking", "text"}
+                ),
+            ]
+        messages[-1]["content"] = combined
     else:
         messages.append({"role": role, "content": list(blocks)})
 

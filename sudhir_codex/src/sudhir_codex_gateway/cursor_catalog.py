@@ -107,7 +107,6 @@ def cursor_model_info(
         "context_window": CURSOR_CONTEXT_WINDOW,
         "max_context_window": CURSOR_CONTEXT_WINDOW,
         "auto_compact_token_limit": None,
-        "comp_hash": f"sudhir-cursor-{route.cursor_alias}-{route.fast}",
         "effective_context_window_percent": 90,
         "experimental_supported_tools": [],
         "input_modalities": ["text"],

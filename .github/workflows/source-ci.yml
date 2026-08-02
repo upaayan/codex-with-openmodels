@@ -96,7 +96,7 @@ jobs:
       - name: Check and test the gateway
         run: |
           python -m compileall -q sudhir_codex/src sudhir_codex/tests
-          python -m unittest discover -s sudhir_codex/tests -v
+          python scripts/tests/sudhir_targeted_regressions.py gateway
           ruff check sudhir_codex/src sudhir_codex/tests
           bash scripts/tests/install-sudhir-codex.tests.sh
 
@@ -132,7 +132,7 @@ jobs:
         shell: pwsh
         run: |
           python -m compileall -q sudhir_codex/src sudhir_codex/tests
-          python -m unittest discover -s sudhir_codex/tests -v
+          python scripts/tests/sudhir_targeted_regressions.py gateway
           ruff check sudhir_codex/src sudhir_codex/tests
 
       - name: Test the Windows Pi model setup script
@@ -300,3 +300,6 @@ jobs:
           just test -p codex-tui active_reasoning_effort_does_not_change_new_task_default
           just test -p codex-tui active_plan_reasoning_effort_does_not_change_new_task_default
           just test -p codex-app-server config_batch_write_keeps_model_defaults_while_writing_other_settings
+
+      - name: Run targeted model-switch regressions
+        run: python3 scripts/tests/sudhir_targeted_regressions.py rust

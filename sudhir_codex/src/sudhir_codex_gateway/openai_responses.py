@@ -25,7 +25,7 @@ def responses_to_openai_request(
     if not isinstance(input_items, list):
         raise GatewayError(400, "invalid_input", "Responses input must be a list")
 
-    bindings = ToolBindings(_available_tools(request, input_items))
+    bindings = ToolBindings(_active_tools(request, input_items))
     upstream_input = _translate_input(
         input_items,
         instructions=request.get("instructions"),
@@ -204,7 +204,7 @@ def _translate_input(
     return translated
 
 
-def _available_tools(
+def _active_tools(
     request: dict[str, Any],
     input_items: list[object],
 ) -> list[object]:
@@ -214,6 +214,12 @@ def _available_tools(
     if not isinstance(tools, list):
         raise GatewayError(400, "invalid_tools", "Responses tools must be a list")
     available = list(tools)
+    tool_search_active = any(
+        isinstance(tool, dict) and tool.get("type") == "tool_search"
+        for tool in tools
+    )
+    if not tool_search_active:
+        return available
     for item in input_items:
         if not isinstance(item, dict) or item.get("type") != "tool_search_output":
             continue
@@ -308,11 +314,7 @@ def _translate_tool_call(
         name = "tool_search"
     binding = bindings.for_original(namespace, name, binding_kind)
     if binding is None:
-        raise GatewayError(
-            400,
-            "unknown_history_tool",
-            f"History references unknown tool {name!r}",
-        )
+        binding = bindings.for_history(namespace, name, binding_kind)
     call_id = item.get("call_id")
     if not isinstance(call_id, str) or not call_id:
         raise GatewayError(400, "invalid_tool_call", "Tool call has no call_id")

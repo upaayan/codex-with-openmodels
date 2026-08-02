@@ -346,7 +346,6 @@ def synthesize_model_info(
         "context_window": model.context_window,
         "max_context_window": model.context_window,
         "auto_compact_token_limit": None,
-        "comp_hash": f"sudhir-{model.provider_id}-{model.context_window}",
         "effective_context_window_percent": 90,
         "experimental_supported_tools": [],
         "input_modalities": modalities,

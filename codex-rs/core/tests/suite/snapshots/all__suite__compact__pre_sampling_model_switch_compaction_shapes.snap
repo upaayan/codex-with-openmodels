@@ -1,15 +1,15 @@
 ---
 source: core/tests/suite/compact.rs
-expression: "format_labeled_requests_snapshot(\"Pre-sampling compaction on model switch to a smaller context window: current behavior compacts using prior-turn history only (incoming user message excluded), and the follow-up request carries compacted history plus the new user message.\",\n&[(\"Initial Request (Previous Model)\", &requests[0]),\n(\"Pre-sampling Compaction Request\", &requests[1]),\n(\"Post-Compaction Follow-up Request (Next Model)\", &requests[2]),])"
+expression: "format_labeled_requests_snapshot(\"Pre-sampling compaction on model switch to a smaller context window: the selected model compacts prior-turn history only (incoming user message excluded), and the selected-model follow-up carries compacted history plus the new user message.\",\n&[(\"Initial Request (Previous Model)\", &requests[0]),\n(\"Pre-sampling Compaction Request (Selected Model)\", &requests[1]),\n(\"Post-Compaction Follow-up Request (Next Model)\", &requests[2]),])"
 ---
-Scenario: Pre-sampling compaction on model switch to a smaller context window: current behavior compacts using prior-turn history only (incoming user message excluded), and the follow-up request carries compacted history plus the new user message.
+Scenario: Pre-sampling compaction on model switch to a smaller context window: the selected model compacts prior-turn history only (incoming user message excluded), and the selected-model follow-up carries compacted history plus the new user message.
 
 ## Initial Request (Previous Model)
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
 01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/user:before switch
 
-## Pre-sampling Compaction Request
+## Pre-sampling Compaction Request (Selected Model)
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
 01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/user:before switch
