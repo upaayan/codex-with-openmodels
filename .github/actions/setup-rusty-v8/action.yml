@@ -39,6 +39,10 @@ runs:
         curl -fsSL "${base_url}/${binding_name}" -o "${binding_path}"
         curl -fsSL "${base_url}/${checksums_name}" -o "${checksums_path}"
 
+        normalized_checksums_path="${checksums_path}.normalized"
+        tr -d '\r' < "${checksums_path}" > "${normalized_checksums_path}"
+        mv "${normalized_checksums_path}" "${checksums_path}"
+
         if [[ "$(wc -l < "${checksums_path}")" -ne 2 ]]; then
           echo "Expected exactly two checksums for ${TARGET} in ${checksums_path}" >&2
           exit 1
