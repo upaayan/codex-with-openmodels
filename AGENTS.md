@@ -1,5 +1,33 @@
 # Rust/codex-rs
 
+## Sudhir-Codex owner testing override
+
+**DO NOT run the complete Codex workspace suite, the complete `codex-core`
+suite, or another broad upstream suite for Sudhir-Codex model-switch,
+compaction, gateway, or reasoning work. Treat upstream Codex test coverage as
+given. Run only the explicitly named tests that map to a Sudhir-Codex change.
+A broad upstream suite may be run only when the owner explicitly requests that
+exact suite in the current task. This owner rule overrides the general
+complete-suite guidance later in this file.**
+
+The authoritative test selection and rationale are recorded in
+`documents/plan-audit-implementation/sudhir_codex_targeted_regression_plan.md`
+in the private maintenance checkout. The publication checkout's executable
+manifest is `scripts/tests/sudhir_fork_contracts.toml`. Validate it with
+`scripts/tests/verify_sudhir_fork_contracts.py` and execute it only through
+`scripts/tests/run_sudhir_fork_contracts.py`; do not recreate a handwritten
+test list.
+
+Use the correct validation lane:
+
+- gateway/config changes: exact Python test methods locally, then the same
+  manifest in GitHub source CI;
+- Rust binary changes: exact changed-behavior filters and the native build in
+  GitHub; do not perform a heavy local Cargo build for a Sudhir-Codex release;
+- frontend changes: use the separate `sudhir-codex-app` Git repository and its
+  six launcher/framework tests plus real macOS bundle validation. Do not mix
+  frontend checks with backend suites.
+
 In the codex-rs folder where the rust code lives:
 
 - Crate names are prefixed with `codex-`. For example, the `core` folder's crate is named `codex-core`

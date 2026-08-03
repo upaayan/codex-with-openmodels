@@ -15,7 +15,12 @@ runs:
       run: |
         set -euo pipefail
 
-        version="$(python3 "${GITHUB_WORKSPACE}/.github/scripts/rusty_v8_bazel.py" resolved-v8-crate-version)"
+        python_command="$(command -v python3 || command -v python || true)"
+        if [[ -z "$python_command" ]]; then
+          echo "Python is required before configuring rusty_v8" >&2
+          exit 1
+        fi
+        version="$("$python_command" "${GITHUB_WORKSPACE}/.github/scripts/rusty_v8_bazel.py" resolved-v8-crate-version)"
         release_tag="rusty-v8-v${version}"
         base_url="https://github.com/openai/codex/releases/download/${release_tag}"
         binding_dir="${RUNNER_TEMP}/rusty_v8"
@@ -39,6 +44,10 @@ runs:
         curl -fsSL "${base_url}/${binding_name}" -o "${binding_path}"
         curl -fsSL "${base_url}/${checksums_name}" -o "${checksums_path}"
 
+        normalized_checksums_path="${checksums_path}.normalized"
+        tr -d '\r' < "${checksums_path}" > "${normalized_checksums_path}"
+        mv "${normalized_checksums_path}" "${checksums_path}"
+
         if [[ "$(wc -l < "${checksums_path}")" -ne 2 ]]; then
           echo "Expected exactly two checksums for ${TARGET} in ${checksums_path}" >&2
           exit 1
@@ -49,5 +58,7 @@ runs:
         else
           (cd "${binding_dir}" && shasum -a 256 -c "${checksums_path}")
         fi
+        test -s "${archive_path}"
+        test -s "${binding_path}"
         echo "RUSTY_V8_ARCHIVE=${archive_path}" >> "${GITHUB_ENV}"
         echo "RUSTY_V8_SRC_BINDING_PATH=${binding_path}" >> "${GITHUB_ENV}"
