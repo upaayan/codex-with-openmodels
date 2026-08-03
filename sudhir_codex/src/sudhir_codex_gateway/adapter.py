@@ -51,9 +51,13 @@ class ToolBindings:
     """A reversible mapping between Responses and Chat tool names."""
 
     def __init__(self, tools: object) -> None:
+        # `bindings` and `by_encoded` contain active tools only. Historical
+        # bindings share the encoding collision domain but cannot authorize a
+        # new provider tool call.
         self.bindings: list[ToolBinding] = []
         self.by_encoded: dict[str, ToolBinding] = {}
         self.by_original: dict[tuple[str | None, str, str], ToolBinding] = {}
+        self._all_by_encoded: dict[str, ToolBinding] = {}
         self._parse(tools)
 
     def chat_tools(self) -> list[dict[str, Any]]:
@@ -76,6 +80,24 @@ class ToolBindings:
         kind: str = "function",
     ) -> ToolBinding | None:
         return self.by_original.get((namespace, name, kind))
+
+    def for_history(
+        self,
+        namespace: str | None,
+        name: str,
+        kind: str = "function",
+    ) -> ToolBinding:
+        existing = self.for_original(namespace, name, kind)
+        if existing is not None:
+            return existing
+        return self._add(
+            kind=kind,
+            name=name,
+            namespace=namespace,
+            description="",
+            parameters={"type": "object", "properties": {}},
+            active=False,
+        )
 
     def _parse(self, tools: object) -> None:
         if tools is None:
@@ -122,6 +144,7 @@ class ToolBindings:
                         tool.get("description", "Search available Codex tools.")
                     ),
                     parameters=parameters,
+                    active=True,
                 )
             elif kind == "web_search":
                 raise GatewayError(
@@ -148,6 +171,7 @@ class ToolBindings:
             namespace=namespace,
             description=str(tool.get("description", "")),
             parameters=_schema(tool.get("parameters")),
+            active=True,
         )
 
     def _add_custom(self, tool: dict[str, Any], namespace: str | None) -> None:
@@ -167,6 +191,7 @@ class ToolBindings:
                 "required": ["input"],
                 "additionalProperties": False,
             },
+            active=True,
         )
 
     def _add(
@@ -177,15 +202,18 @@ class ToolBindings:
         namespace: str | None,
         description: str,
         parameters: dict[str, Any],
-    ) -> None:
+        active: bool,
+    ) -> ToolBinding:
         original = (namespace, name, kind)
-        if original in self.by_original:
-            return
+        existing = self.by_original.get(original)
+        if existing is not None:
+            return existing
         qualified = f"{namespace}__{name}" if namespace else name
-        encoded = _encoded_tool_name(qualified, len(self.bindings))
-        while encoded in self.by_encoded:
+        encoded = _encoded_tool_name(qualified, len(self._all_by_encoded))
+        while encoded in self._all_by_encoded:
             encoded = _encoded_tool_name(
-                f"{qualified}_{len(self.bindings)}", len(self.bindings)
+                f"{qualified}_{len(self._all_by_encoded)}",
+                len(self._all_by_encoded),
             )
         binding = ToolBinding(
             encoded_name=encoded,
@@ -195,9 +223,12 @@ class ToolBindings:
             description=description,
             parameters=parameters,
         )
-        self.bindings.append(binding)
-        self.by_encoded[encoded] = binding
         self.by_original[original] = binding
+        self._all_by_encoded[encoded] = binding
+        if active:
+            self.bindings.append(binding)
+            self.by_encoded[encoded] = binding
+        return binding
 
 
 def responses_to_chat_request(
@@ -423,11 +454,7 @@ def _translate_input(
             name = str(item.get("name", "tool_search"))
             binding = bindings.for_original(namespace, name, binding_kind)
             if binding is None:
-                raise GatewayError(
-                    400,
-                    "unknown_history_tool",
-                    f"History references unknown tool {name!r}",
-                )
+                binding = bindings.for_history(namespace, name, binding_kind)
             call_id = str(item.get("call_id") or f"call_{uuid.uuid4().hex}")
             arguments = item.get("arguments", "{}")
             if kind == "custom_tool_call":
