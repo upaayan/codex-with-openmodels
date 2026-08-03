@@ -43,6 +43,7 @@ class CursorCatalogTests(unittest.TestCase):
             [level["effort"] for level in info["supported_reasoning_levels"]],
             ["high"],
         )
+        self.assertNotIn("comp_hash", info)
 
 
 if __name__ == "__main__":

@@ -22,6 +22,7 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use futures::future::Shared;
 use std::sync::atomic::AtomicBool;
+#[cfg(test)]
 use std::sync::atomic::Ordering;
 use tracing::instrument;
 
@@ -237,6 +238,7 @@ impl TurnContext {
             && self.config.orchestrator_mcp_enabled
     }
 
+    #[cfg(test)]
     pub(crate) async fn with_model(
         &self,
         model: String,

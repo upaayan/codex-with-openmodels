@@ -140,6 +140,7 @@ mod sqlite_state;
 mod stream_error_allows_next_turn;
 mod stream_no_completed;
 mod subagent_notifications;
+mod sudhir_model_continuity;
 mod token_budget;
 mod tool_harness;
 mod tool_parallelism;

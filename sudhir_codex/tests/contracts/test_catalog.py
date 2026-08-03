@@ -72,5 +72,8 @@ class CatalogContracts(unittest.TestCase):
             synthesized = [
                 model for model in document["models"] if model["slug"] != "gpt-test"
             ]
-            self.assertTrue(synthesized)
-            self.assertTrue(all("comp_hash" not in model for model in synthesized))
+            self.assertTrue(synthesized, "fixture must include synthesized Pi/Cursor models")
+            self.assertTrue(
+                all("comp_hash" not in model for model in synthesized),
+                "synthesized provider models must not fabricate compaction identity",
+            )
