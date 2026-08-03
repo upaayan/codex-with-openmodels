@@ -420,7 +420,7 @@ async fn multi_agent_v2_spawn_rejects_child_model_from_different_backend() {
     assert_eq!(
         err,
         FunctionCallError::RespondToModel(
-            "Unknown model `gpt-5.4` for spawn_agent. Available models: gpt-5.6-sol, gpt-5.6-terra"
+            "Unknown model `gpt-5.4` for spawn_agent. There are 2 eligible picker models. Bounded sample (not exhaustive): gpt-5.6-sol, gpt-5.6-terra. Use an exact `/model` or `sudhir-codex models` ID."
                 .to_string()
         )
     );
@@ -1158,7 +1158,8 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
                         && communication.recipient.as_str() == "/root/test_process"
                         && communication.other_recipients.is_empty()
                         && communication.content.is_empty()
-                        && communication.encrypted_content.as_deref() == Some("encrypted-spawn-message")
+                        && communication.encrypted_content.as_deref()
+                            == Some("encrypted-spawn-message")
                         && communication.trigger_turn
             )
     }));
@@ -1185,7 +1186,8 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
                         && communication.recipient.as_str() == "/root/test_process"
                         && communication.other_recipients.is_empty()
                         && communication.content.is_empty()
-                        && communication.encrypted_content.as_deref() == Some("encrypted-send-message")
+                        && communication.encrypted_content.as_deref()
+                            == Some("encrypted-send-message")
                         && !communication.trigger_turn
             )
     }));

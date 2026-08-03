@@ -109,6 +109,7 @@ async fn handle_spawn_agent(
         author,
         new_agent_path.clone(),
         message,
+        turn.as_ref(),
         &source,
         /*trigger_turn*/ true,
     );

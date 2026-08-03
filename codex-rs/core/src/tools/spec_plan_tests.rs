@@ -1788,7 +1788,7 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_message_schemas_are_encrypted() {
+async fn multi_agent_v2_message_schemas_are_plaintext() {
     let plan = probe(|turn| {
         set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
     })
@@ -1814,7 +1814,7 @@ async fn multi_agent_v2_message_schemas_are_encrypted() {
             properties
                 .get("message")
                 .and_then(|schema| schema.encrypted),
-            Some(true)
+            None
         );
     }
 }
@@ -2139,6 +2139,13 @@ async fn hosted_web_search_and_standalone_image_generation_follow_runtime_gates(
             search_content_types: Some(vec!["text".to_string(), "image".to_string()]),
         }
     );
+
+    let sudhir_pi_model = probe(|turn| {
+        set_web_search_mode(turn, WebSearchMode::Live);
+        turn.model_info.slug = "pi-demo/example-model".to_string();
+    })
+    .await;
+    sudhir_pi_model.assert_visible_lacks(&["web_search"]);
 
     let code_mode_only = probe(|turn| {
         use_chatgpt_auth(turn);

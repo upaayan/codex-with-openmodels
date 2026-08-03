@@ -6,6 +6,7 @@ small and focused and reuses the orchestrator for approvals + sandbox + retry.
 */
 use crate::exec_env::CODEX_PERMISSION_PROFILE_ENV_VAR;
 use crate::exec_env::CODEX_THREAD_ID_ENV_VAR;
+use crate::exec_env::SUDHIR_CODEX_GATEWAY_TOKEN_ENV_VAR;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::shell::ShellType;
@@ -272,9 +273,18 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
             override_env.insert(key.to_string(), value.clone());
         }
     }
+    // The gateway token authenticates the parent Codex process only. Ignore any
+    // configured override and restore its filtered live state after sourcing a
+    // snapshot so neither new nor stale snapshots can expose it to tools.
+    override_env.remove(SUDHIR_CODEX_GATEWAY_TOKEN_ENV_VAR);
     // Do not let a snapshot resurrect a stale profile when no named profile is active.
-    let (override_captures, override_exports) =
-        build_override_exports(&override_env, &[CODEX_PERMISSION_PROFILE_ENV_VAR]);
+    let (override_captures, override_exports) = build_override_exports(
+        &override_env,
+        &[
+            CODEX_PERMISSION_PROFILE_ENV_VAR,
+            SUDHIR_CODEX_GATEWAY_TOKEN_ENV_VAR,
+        ],
+    );
     let (proxy_captures, proxy_exports) = build_proxy_env_exports();
     let runtime_path_prepend_exports =
         runtime_path_prepends.shell_exports_after_snapshot(explicit_env_overrides);
