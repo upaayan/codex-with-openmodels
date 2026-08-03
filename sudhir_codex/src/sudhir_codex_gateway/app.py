@@ -6,6 +6,7 @@ import json
 import os
 import threading
 import time
+from dataclasses import replace
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,8 @@ from .deepseek_diagnostics import DeepSeekDiagnosticCapture
 from .errors import GatewayError
 from .openai_responses import openai_response_to_sse
 from .openai_responses import responses_to_openai_request
+from .pi_auth_worker import PiAuthWorker
+from .pi_auth_worker import PiAuthWorkerClient
 from .platform_support import ensure_private_directory
 from .platform_support import ensure_private_file
 from .visibility import apply_model_visibility
@@ -118,6 +121,10 @@ class GatewaySettings:
         return self.repo_root / "sudhir_codex" / "cursor_worker" / "worker.mjs"
 
     @property
+    def pi_auth_worker_path(self) -> Path:
+        return self.repo_root / "sudhir_codex" / "cursor_worker" / "pi-auth-worker.mjs"
+
+    @property
     def cursor_state_dir(self) -> Path:
         return self.state_dir / "cursor-sdk"
 
@@ -183,13 +190,21 @@ class GatewayApp:
         *,
         http_client: httpx.Client | None = None,
         cursor_worker: CursorWorker | None = None,
+        pi_auth_worker: PiAuthWorker | None = None,
     ) -> None:
         self.settings = settings
         self.loader = CatalogLoader(
             settings.models_path,
             settings.base_instructions_path,
         )
-        self.credentials = CredentialResolver(settings.pi_auth_path)
+        self.pi_auth_worker = pi_auth_worker or PiAuthWorkerClient(
+            worker_script=settings.pi_auth_worker_path,
+            agent_dir=settings.pi_agent_dir,
+        )
+        self.credentials = CredentialResolver(
+            settings.pi_auth_path,
+            oauth_worker=self.pi_auth_worker,
+        )
         self.client = http_client or httpx.Client(
             follow_redirects=False,
             timeout=httpx.Timeout(600.0, connect=15.0),
@@ -217,7 +232,10 @@ class GatewayApp:
         try:
             self.cursor_worker.close()
         finally:
-            self.client.close()
+            try:
+                self.pi_auth_worker.close()
+            finally:
+                self.client.close()
 
     def authenticate(self, provided: str | None) -> bool:
         if not isinstance(provided, str):
@@ -364,17 +382,23 @@ class GatewayApp:
                 if model.api == "anthropic-messages"
                 else chat_request
             )
+        resolved_auth = self.credentials.resolve(model)
+        routed_model = (
+            replace(model, base_url=resolved_auth.base_url)
+            if resolved_auth.base_url is not None
+            else model
+        )
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
             "User-Agent": "sudhir-codex-gateway/0.1",
-            **self.credentials.authorization_headers(model),
+            **resolved_auth.headers,
         }
-        destination = urlparse(model.request_url).hostname or "invalid"
+        destination = urlparse(routed_model.request_url).hostname or "invalid"
         started = time.monotonic()
         try:
             upstream = self.client.post(
-                model.request_url,
+                routed_model.request_url,
                 headers=headers,
                 json=upstream_request,
             )
