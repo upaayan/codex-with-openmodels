@@ -81,7 +81,6 @@ use codex_file_system::FindUpErrorPolicy;
 use codex_file_system::find_nearest_ancestor_with_markers;
 use codex_login::CodexAuth;
 use codex_protocol::ResponseItemId;
-use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::error::CodexErr;
@@ -986,8 +985,6 @@ async fn run_pre_sampling_compact(
     client_session: &mut ModelClientSession,
     cancellation_token: &CancellationToken,
 ) -> CodexResult<()> {
-    maybe_run_previous_model_inline_compact(sess, turn_context, client_session, cancellation_token)
-        .await?;
     let token_status =
         super::context_window::context_window_token_status(sess.as_ref(), turn_context.as_ref())
             .await;
@@ -1004,136 +1001,6 @@ async fn run_pre_sampling_compact(
             client_session,
             InitialContextInjection::DoNotInject,
             CompactionReason::ContextLimit,
-            CompactionPhase::PreTurn,
-        )
-        .await?;
-    }
-    Ok(())
-}
-
-/// Returns true only when both turns declare compaction compatibility hashes and they differ.
-/// A missing hash does not provide enough information to trigger compaction.
-fn comp_hash_changed(previous: Option<&str>, current: Option<&str>) -> bool {
-    previous
-        .zip(current)
-        .is_some_and(|(previous, current)| previous != current)
-}
-
-/// Captures the current model's request-scoped state for retrying previous-model compaction.
-///
-/// Returns `None` when the active authentication does not use the Codex backend, the provider is
-/// not OpenAI, or the previous and current model are the same.
-async fn capture_current_model_fallback_step_context(
-    sess: &Arc<Session>,
-    turn_context: &Arc<TurnContext>,
-    previous_model: &str,
-    cancellation_token: &CancellationToken,
-) -> CodexResult<Option<Arc<StepContext>>> {
-    let uses_codex_backend = turn_context
-        .auth_manager
-        .as_deref()
-        .is_some_and(codex_login::AuthManager::current_auth_uses_codex_backend);
-    if !uses_codex_backend
-        || !turn_context.provider.info().is_openai()
-        || previous_model == turn_context.model_info.slug
-    {
-        return Ok(None);
-    }
-    sess.capture_step_context(Arc::clone(turn_context), cancellation_token)
-        .await
-        .map(Some)
-}
-
-/// Runs pre-sampling compaction against the previous model when its compaction compatibility
-/// hash changed or when switching to a smaller context-window model.
-///
-/// Returns `Err(_)` only when compaction was attempted and failed.
-async fn maybe_run_previous_model_inline_compact(
-    sess: &Arc<Session>,
-    turn_context: &Arc<TurnContext>,
-    client_session: &mut ModelClientSession,
-    cancellation_token: &CancellationToken,
-) -> CodexResult<()> {
-    let Some(previous_turn_settings) = sess.previous_turn_settings().await else {
-        return Ok(());
-    };
-    let should_compact_for_comp_hash_change = comp_hash_changed(
-        previous_turn_settings.comp_hash.as_deref(),
-        turn_context.model_info.comp_hash.as_deref(),
-    );
-    let previous_model = previous_turn_settings.model;
-    let previous_model_turn_context = Arc::new(
-        turn_context
-            .with_model(previous_model.clone(), &sess.services.models_manager)
-            .await,
-    );
-
-    if should_compact_for_comp_hash_change {
-        let step_context = sess
-            .capture_step_context(Arc::clone(&previous_model_turn_context), cancellation_token)
-            .await?;
-        let fallback_step_context = capture_current_model_fallback_step_context(
-            sess,
-            turn_context,
-            previous_model.as_str(),
-            cancellation_token,
-        )
-        .await?;
-        run_auto_compact(
-            sess,
-            step_context,
-            fallback_step_context,
-            client_session,
-            InitialContextInjection::DoNotInject,
-            CompactionReason::CompHashChanged,
-            CompactionPhase::PreTurn,
-        )
-        .await?;
-        return Ok(());
-    }
-
-    let Some(old_context_window) = previous_model_turn_context.model_context_window() else {
-        return Ok(());
-    };
-    let Some(new_context_window) = turn_context.model_context_window() else {
-        return Ok(());
-    };
-    let active_context_tokens = sess.get_total_token_usage().await;
-    let previous_model_limit_reached = match turn_context
-        .config
-        .model_auto_compact_token_limit_scope
-    {
-        AutoCompactTokenLimitScope::Total => {
-            let new_auto_compact_limit = turn_context
-                .model_info
-                .auto_compact_token_limit()
-                .unwrap_or(i64::MAX);
-            active_context_tokens > new_auto_compact_limit
-                || active_context_tokens >= new_context_window
-        }
-        AutoCompactTokenLimitScope::BodyAfterPrefix => active_context_tokens >= new_context_window,
-    };
-    let should_run = previous_model_limit_reached
-        && previous_model_turn_context.model_info.slug != turn_context.model_info.slug
-        && old_context_window > new_context_window;
-    if should_run {
-        let step_context = sess
-            .capture_step_context(Arc::clone(&previous_model_turn_context), cancellation_token)
-            .await?;
-        let fallback_step_context = capture_current_model_fallback_step_context(
-            sess,
-            turn_context,
-            previous_model.as_str(),
-            cancellation_token,
-        )
-        .await?;
-        run_auto_compact(
-            sess,
-            step_context,
-            fallback_step_context,
-            client_session,
-            InitialContextInjection::DoNotInject,
-            CompactionReason::ModelDownshift,
             CompactionPhase::PreTurn,
         )
         .await?;
