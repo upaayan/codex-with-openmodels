@@ -95,6 +95,21 @@ platforms = ["linux"]
 always = false
 
 [[contract]]
+id = "SC-WEB-SEARCH-001"
+behavior = "Pi and other open-model routes receive Codex standalone web.run, whose authenticated search requests are proxied through the ChatGPT Codex search backend without changing normal model routing"
+patch = "fork[web-search]"
+source = ["sudhir_codex/src/sudhir_codex_gateway/state.py", "sudhir_codex/src/sudhir_codex_gateway/launcher.py", "sudhir_codex/src/sudhir_codex_gateway/server.py", "sudhir_codex/src/sudhir_codex_gateway/app.py"]
+test_file = "sudhir_codex/tests/contracts/test_web_search.py"
+test_runner = "python-unittest"
+test_name = "WebSearchContracts.test_pi_standalone_web_search_is_configured_and_proxied"
+acceptance_case = "standalone-web-search"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux", "github-windows"]
+lane = "gateway"
+platforms = ["linux", "windows"]
+always = false
+
+[[contract]]
 id = "SC-ARG0-001"
 behavior = "Regular-file and hard-link invocation work without installing or impersonating a command named codex"
 patch = "fork[launcher]"

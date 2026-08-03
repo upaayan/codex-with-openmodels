@@ -78,6 +78,14 @@ CHATGPT_REQUEST_HEADERS = {
     "x-oai-attestation",
     "x-openai-subagent",
 }
+CHATGPT_BUFFERED_RESPONSE_HEADERS = {
+    "cache-control",
+    "content-type",
+    "etag",
+    "openai-model",
+    "x-codex-turn-state",
+    "x-request-id",
+}
 
 
 @dataclass(frozen=True)
@@ -307,6 +315,68 @@ class GatewayApp:
             )
         self._require_known_gpt_model(model_id, incoming_headers)
         return self._gpt_response(request, incoming_headers, model_id)
+
+    def search(
+        self,
+        incoming_headers: dict[str, str],
+        body: bytes,
+    ) -> BufferedResponse:
+        try:
+            request = json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise GatewayError(
+                400, "invalid_json", "Search request body is not valid JSON"
+            ) from exc
+        if not isinstance(request, dict):
+            raise GatewayError(
+                400,
+                "invalid_request",
+                "Search request must be an object",
+            )
+        model_id = request.get("model")
+        if not isinstance(model_id, str) or not model_id:
+            raise GatewayError(400, "model_missing", "Search request has no model")
+
+        target = f"{self.settings.chatgpt_base_url.rstrip('/')}/alpha/search"
+        destination = urlparse(target).hostname or "chatgpt.com"
+        started = time.monotonic()
+        try:
+            upstream = self.client.post(
+                target,
+                headers=_chatgpt_headers(incoming_headers),
+                content=body,
+            )
+        except httpx.HTTPError as exc:
+            self._audit(model_id, "openai-codex-search", destination, 0, started)
+            raise GatewayError(
+                502,
+                "chatgpt_search_unreachable",
+                "ChatGPT Codex search backend could not be reached",
+            ) from exc
+        self._audit(
+            model_id,
+            "openai-codex-search",
+            destination,
+            upstream.status_code,
+            started,
+        )
+        if upstream.is_redirect:
+            raise GatewayError(
+                502,
+                "chatgpt_search_redirect",
+                "ChatGPT Codex search backend attempted a redirect",
+            )
+        response_headers = {
+            name: value
+            for name, value in upstream.headers.items()
+            if name.lower() in CHATGPT_BUFFERED_RESPONSE_HEADERS
+        }
+        response_headers.setdefault("content-type", "application/json")
+        return BufferedResponse(
+            status=upstream.status_code,
+            headers=response_headers,
+            body=upstream.content,
+        )
 
     def catalog(self, *, refresh: bool = False) -> Catalog:
         with self._catalog_lock:
