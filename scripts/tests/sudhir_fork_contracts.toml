@@ -1,0 +1,1022 @@
+schema_version = 1
+
+[[contract]]
+id = "SC-STATE-001"
+behavior = "Private state and auth are independent regular-file copies; official Codex state is untouched"
+patch = "fork[state]"
+source = ["sudhir_codex/src/sudhir_codex_gateway/state.py", "sudhir_codex/src/sudhir_codex_gateway/launcher.py"]
+test_file = "sudhir_codex/tests/contracts/test_state.py"
+test_runner = "python-unittest"
+test_name = "StateContracts.test_private_state_and_auth_are_isolated_regular_files"
+acceptance_case = "private-state-isolation"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux", "github-windows"]
+lane = "gateway"
+platforms = ["linux", "windows"]
+always = false
+
+[[contract.ci_checks]]
+inventory_id = "WF-bf9c6b17966ebec9"
+workflow = ".github/workflows/source-ci.yml"
+job = "gateway-windows"
+step = "Test the Windows skills and AGENTS installer"
+command = ".\\scripts\\tests\\install-sudhir-codex-context.tests.ps1"
+working_directory = ""
+shell = "pwsh"
+platforms = ["windows"]
+[[contract]]
+id = "SC-GATEWAY-001"
+behavior = "The authenticated gateway accepts only loopback binding"
+patch = "fork[launcher]"
+source = ["sudhir_codex/src/sudhir_codex_gateway/server.py", "sudhir_codex/src/sudhir_codex_gateway/launcher.py"]
+test_file = "sudhir_codex/tests/contracts/test_gateway.py"
+test_runner = "python-unittest"
+test_name = "GatewayContracts.test_authenticated_gateway_is_loopback_only"
+acceptance_case = "gateway-auth-loopback"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux", "github-windows"]
+lane = "gateway"
+platforms = ["linux", "windows"]
+always = false
+
+[[contract.ci_checks]]
+inventory_id = "WF-063d18855e95f07d"
+workflow = ".github/workflows/source-ci.yml"
+job = "gateway-windows"
+step = "Check and test the native Windows gateway"
+command = "python -m compileall -q sudhir_codex/src sudhir_codex/tests"
+working_directory = ""
+shell = "pwsh"
+platforms = ["windows"]
+
+[[contract.ci_checks]]
+inventory_id = "WF-169192c604126af2"
+workflow = ".github/workflows/source-ci.yml"
+job = "gateway-linux"
+step = "Check and test the gateway"
+command = "ruff check sudhir_codex/src sudhir_codex/tests"
+working_directory = ""
+shell = ""
+platforms = ["linux"]
+
+[[contract.ci_checks]]
+inventory_id = "WF-56c66d1f8a70c6a1"
+workflow = ".github/workflows/source-ci.yml"
+job = "gateway-windows"
+step = "Check and test the native Windows gateway"
+command = "ruff check sudhir_codex/src sudhir_codex/tests"
+working_directory = ""
+shell = "pwsh"
+platforms = ["windows"]
+
+[[contract.ci_checks]]
+inventory_id = "WF-aa6a94a853aceea7"
+workflow = ".github/workflows/source-ci.yml"
+job = "gateway-linux"
+step = "Check and test the gateway"
+command = "python -m compileall -q sudhir_codex/src sudhir_codex/tests"
+working_directory = ""
+shell = ""
+platforms = ["linux"]
+
+[[contract]]
+id = "SC-GATEWAY-002"
+behavior = "The gateway client token never reaches model-invoked shell snapshots"
+patch = "fork[launcher]"
+source = ["codex-rs/core/src/exec_env.rs", "codex-rs/core/src/shell_snapshot.rs"]
+test_file = "codex-rs/core/src/sudhir_launcher_contracts_tests.rs"
+test_runner = "rust-nextest"
+test_name = "gateway_token_is_absent_from_model_shell_snapshot"
+acceptance_case = "gateway-token-exclusion"
+acceptance_mode = "artifact"
+acceptance_hosts = ["staged-macos"]
+lane = "core"
+platforms = ["linux"]
+always = false
+
+[[contract]]
+id = "SC-ARG0-001"
+behavior = "Regular-file and hard-link invocation work without installing or impersonating a command named codex"
+patch = "fork[launcher]"
+source = ["codex-rs/arg0/src/lib.rs", "codex-rs/cli/src/main.rs"]
+test_file = "codex-rs/arg0/src/sudhir_arg0_contracts_tests.rs"
+test_runner = "rust-nextest"
+test_name = "regular_file_and_hard_link_invocations_preserve_sudhir_identity"
+acceptance_case = "arg0-identity"
+acceptance_mode = "artifact"
+acceptance_hosts = ["staged-macos"]
+lane = "core"
+platforms = ["linux"]
+always = false
+
+[[contract]]
+id = "SC-CATALOG-001"
+behavior = "GPT and open-model catalogs merge with collision-free model IDs"
+patch = "fork[catalog]"
+source = ["sudhir_codex/src/sudhir_codex_gateway/catalog.py", "sudhir_codex/src/sudhir_codex_gateway/cursor_catalog.py", "sudhir_codex/src/sudhir_codex_gateway/app.py"]
+test_file = "sudhir_codex/tests/contracts/test_catalog.py"
+test_runner = "python-unittest"
+test_name = "CatalogContracts.test_merged_catalog_has_unique_gpt_pi_and_cursor_ids"
+acceptance_case = "merged-catalog"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux", "github-windows"]
+lane = "gateway"
+platforms = ["linux", "windows"]
+always = false
+
+[[contract.ci_checks]]
+parent_inventory_id = "WF-2ece06693e9d2733"
+workflow = ".github/workflows/source-ci.yml"
+job = "gateway-windows"
+step = "Check the pinned Windows Node workers"
+command = "npm ls --omit=dev @cursor/sdk @cursor/sdk-win32-x64 @earendil-works/pi-coding-agent"
+derived_command = "npm ls --omit=dev @cursor/sdk @cursor/sdk-win32-x64"
+working_directory = "sudhir_codex/cursor_worker"
+shell = "pwsh"
+platforms = ["windows"]
+
+[[contract.ci_checks]]
+inventory_id = "WF-7457fedc139e43bb"
+workflow = ".github/workflows/source-ci.yml"
+job = "gateway-windows"
+step = "Check the pinned Windows Node workers"
+command = "$WorkerSmokeRoot = Join-Path $env:RUNNER_TEMP \"cursor-worker-startup\"\n$WorkerState = Join-Path $WorkerSmokeRoot \"state\"\n$WorkerAuth = Join-Path $WorkerSmokeRoot \"auth.json\"\n$EmptyInput = Join-Path $WorkerSmokeRoot \"stdin.txt\"\n$WorkerStdout = Join-Path $WorkerSmokeRoot \"stdout.log\"\n$WorkerStderr = Join-Path $WorkerSmokeRoot \"stderr.log\"\nNew-Item -ItemType Directory -Path $WorkerState -Force | Out-Null\nSet-Content -LiteralPath $WorkerAuth -Value \"{}\" -NoNewline\nNew-Item -ItemType File -Path $EmptyInput -Force | Out-Null\n\n$env:SUDHIR_CURSOR_AUTH_PATH = $WorkerAuth\n$env:SUDHIR_CURSOR_STATE_DIR = $WorkerState\n$Worker = Start-Process `\n  -FilePath (Get-Command node).Source `\n  -ArgumentList \"worker.mjs\" `\n  -NoNewWindow `\n  -PassThru `\n  -RedirectStandardInput $EmptyInput `\n  -RedirectStandardOutput $WorkerStdout `\n  -RedirectStandardError $WorkerStderr\nif (-not $Worker.WaitForExit(10000)) {\n  Stop-Process -Id $Worker.Id -Force\n  throw \"Cursor worker did not exit after closed stdin\"\n}\nif ($Worker.ExitCode -ne 0) {\n  Get-Content -LiteralPath $WorkerStderr\n  throw \"Cursor worker startup failed with exit code $($Worker.ExitCode)\"\n}"
+working_directory = "sudhir_codex/cursor_worker"
+shell = "pwsh"
+platforms = ["windows"]
+
+[[contract.ci_checks]]
+inventory_id = "WF-92745d0bf2fb9a22"
+workflow = ".github/workflows/source-ci.yml"
+job = "gateway-linux"
+step = "Check the pinned Node workers"
+command = "node --check worker.mjs"
+working_directory = "sudhir_codex/cursor_worker"
+shell = ""
+platforms = ["linux"]
+
+[[contract.ci_checks]]
+parent_inventory_id = "WF-a6086762317b575a"
+workflow = ".github/workflows/source-ci.yml"
+job = "gateway-linux"
+step = "Check the pinned Node workers"
+command = "npm ls --omit=dev @cursor/sdk @earendil-works/pi-coding-agent"
+derived_command = "npm ls --omit=dev @cursor/sdk"
+working_directory = "sudhir_codex/cursor_worker"
+shell = ""
+platforms = ["linux"]
+
+[[contract.ci_checks]]
+inventory_id = "WF-d7b9ec12c527ab77"
+workflow = ".github/workflows/source-ci.yml"
+job = "gateway-windows"
+step = "Check the pinned Windows Node workers"
+command = "node --check worker.mjs"
+working_directory = "sudhir_codex/cursor_worker"
+shell = "pwsh"
+platforms = ["windows"]
+
+[[contract.ci_checks]]
+inventory_id = "WF-df5ce060f70fb94d"
+workflow = ".github/workflows/source-ci.yml"
+job = "gateway-windows"
+step = "Test the Windows Pi model setup script"
+command = ".\\scripts\\tests\\setup-pi-models.tests.ps1"
+working_directory = ""
+shell = "pwsh"
+platforms = ["windows"]
+
+[[contract]]
+id = "SC-CATALOG-002"
+behavior = "The model visibility policy controls picker and agent visibility"
+patch = "fork[catalog]"
+source = ["sudhir_codex/src/sudhir_codex_gateway/visibility.py", "sudhir_codex/src/sudhir_codex_gateway/catalog.py"]
+test_file = "sudhir_codex/tests/contracts/test_catalog.py"
+test_runner = "python-unittest"
+test_name = "CatalogContracts.test_visibility_policy_controls_picker_and_agent_metadata"
+acceptance_case = "catalog-visibility"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux", "github-windows"]
+lane = "gateway"
+platforms = ["linux", "windows"]
+always = false
+
+[[contract.supporting_tests]]
+inventory_id = "TEST-46da26b6834f6a73"
+file = "sudhir_codex/tests/test_cursor_catalog.py"
+test_name = "test_cursor_catalog.CursorCatalogTests.test_model_metadata_is_picker_and_subagent_visible"
+runner = "python-unittest"
+platforms = ["linux", "windows"]
+expanded_by = ["WRAPPER-49db5d16599671c6", "WRAPPER-b470154ca53f6618"]
+
+[[contract.supporting_tests]]
+inventory_id = "TEST-a669198bd7f02ccc"
+file = "sudhir_codex/tests/test_catalog.py"
+test_name = "test_catalog.CatalogTests.test_synthesized_model_is_picker_and_agent_visible"
+runner = "python-unittest"
+platforms = ["linux", "windows"]
+expanded_by = ["WRAPPER-49db5d16599671c6", "WRAPPER-b470154ca53f6618"]
+
+[[contract]]
+id = "SC-CREDENTIALS-001"
+behavior = "Each route receives only its own credentials and GPT requests retain ChatGPT auth without the gateway secret"
+patch = "fork[catalog]"
+source = ["sudhir_codex/src/sudhir_codex_gateway/credentials.py", "sudhir_codex/src/sudhir_codex_gateway/app.py"]
+test_file = "sudhir_codex/tests/contracts/test_credentials.py"
+test_runner = "python-unittest"
+test_name = "CredentialContracts.test_route_credentials_are_isolated"
+acceptance_case = "credential-isolation"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux", "github-windows"]
+lane = "gateway"
+platforms = ["linux", "windows"]
+always = false
+
+[[contract]]
+id = "SC-REASONING-001"
+behavior = "Every route advertises and sends only its supported reasoning controls"
+patch = "fork[reasoning]"
+source = ["sudhir_codex/src/sudhir_codex_gateway/reasoning.py", "sudhir_codex/src/sudhir_codex_gateway/catalog.py", "sudhir_codex/src/sudhir_codex_gateway/adapter.py"]
+test_file = "sudhir_codex/tests/contracts/test_reasoning.py"
+test_runner = "python-unittest"
+test_name = "ReasoningContracts.test_route_aware_reasoning_controls"
+acceptance_case = "route-reasoning-controls"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux", "github-windows"]
+lane = "gateway"
+platforms = ["linux", "windows"]
+always = false
+
+[[contract.supporting_tests]]
+inventory_id = "TEST-c5a44e0f3a4e1294"
+file = "sudhir_codex/tests/test_adapter.py"
+test_name = "test_adapter.AdapterTests.test_translates_messages_tools_and_reasoning"
+runner = "python-unittest"
+platforms = ["linux", "windows"]
+expanded_by = ["WRAPPER-49db5d16599671c6", "WRAPPER-b470154ca53f6618"]
+
+[[contract]]
+id = "SC-REASONING-002"
+behavior = "DeepSeek Responses receives provider-compatible root-oneOf tool schemas, and DeepSeek and OpenCode replay one assistant completion atomically with reasoning, visible text, and all tool calls"
+patch = "fork[reasoning]"
+source = ["sudhir_codex/src/sudhir_codex_gateway/adapter.py", "sudhir_codex/src/sudhir_codex_gateway/openai_responses.py"]
+test_file = "sudhir_codex/tests/contracts/test_reasoning.py"
+test_runner = "python-unittest"
+test_name = "ReasoningContracts.test_deepseek_and_opencode_atomic_reasoning_text_tool_replay"
+acceptance_case = "deepseek-opencode-replay"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux", "github-windows"]
+lane = "gateway"
+platforms = ["linux", "windows"]
+always = false
+
+[[contract.supporting_tests]]
+inventory_id = "TEST-0cdaae4cb1de264f"
+file = "sudhir_codex/tests/test_adapter.py"
+test_name = "test_adapter.AdapterTests.test_reasoning_aliases_emit_one_canonical_item_without_duplicates"
+runner = "python-unittest"
+platforms = ["linux", "windows"]
+expanded_by = ["WRAPPER-49db5d16599671c6", "WRAPPER-b470154ca53f6618"]
+
+[[contract.supporting_tests]]
+inventory_id = "TEST-6d1f447b751c70ea"
+file = "sudhir_codex/tests/test_adapter.py"
+test_name = "test_adapter.AdapterTests.test_replays_reasoning_alias_for_generic_and_opencode_routes"
+runner = "python-unittest"
+platforms = ["linux", "windows"]
+expanded_by = ["WRAPPER-49db5d16599671c6", "WRAPPER-b470154ca53f6618"]
+
+[[contract.supporting_tests]]
+inventory_id = "TEST-72405b14ad3d08c2"
+file = "sudhir_codex/tests/test_openai_responses.py"
+test_name = "test_openai_responses.OpenAIResponsesTests.test_deepseek_adds_object_type_to_root_one_of_tool_schema"
+runner = "python-unittest"
+platforms = ["linux", "windows"]
+expanded_by = ["WRAPPER-49db5d16599671c6", "WRAPPER-b470154ca53f6618"]
+
+[[contract.supporting_tests]]
+inventory_id = "TEST-7a55060a4cf001e3"
+file = "sudhir_codex/tests/test_adapter.py"
+test_name = "test_adapter.AdapterTests.test_replays_reasoning_item_as_reasoning_content_for_deepseek_routes"
+runner = "python-unittest"
+platforms = ["linux", "windows"]
+expanded_by = ["WRAPPER-49db5d16599671c6", "WRAPPER-b470154ca53f6618"]
+
+[[contract.supporting_tests]]
+inventory_id = "TEST-8243136f5a03cb84"
+file = "sudhir_codex/tests/test_adapter.py"
+test_name = "test_adapter.AdapterTests.test_emits_full_reasoning_as_responses_reasoning_item"
+runner = "python-unittest"
+platforms = ["linux", "windows"]
+expanded_by = ["WRAPPER-49db5d16599671c6", "WRAPPER-b470154ca53f6618"]
+
+[[contract.supporting_tests]]
+inventory_id = "TEST-e0e328ed0cdf3b86"
+file = "sudhir_codex/tests/test_adapter.py"
+test_name = "test_adapter.AdapterTests.test_replays_reasoning_on_tool_call_message_once"
+runner = "python-unittest"
+platforms = ["linux", "windows"]
+expanded_by = ["WRAPPER-49db5d16599671c6", "WRAPPER-b470154ca53f6618"]
+
+[[contract.supporting_tests]]
+inventory_id = "TEST-e5eab460b87eb176"
+file = "sudhir_codex/tests/test_adapter.py"
+test_name = "test_adapter.AdapterTests.test_round_trips_function_custom_and_namespaced_calls"
+runner = "python-unittest"
+platforms = ["linux", "windows"]
+expanded_by = ["WRAPPER-49db5d16599671c6", "WRAPPER-b470154ca53f6618"]
+
+[[contract]]
+id = "SC-REASONING-003"
+behavior = "Provider reasoning-token usage reaches Responses output-token details"
+patch = "fork[reasoning]"
+source = ["sudhir_codex/src/sudhir_codex_gateway/adapter.py"]
+test_file = "sudhir_codex/tests/contracts/test_reasoning.py"
+test_runner = "python-unittest"
+test_name = "ReasoningContracts.test_reasoning_token_accounting_survives_translation"
+acceptance_case = "reasoning-token-accounting"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux", "github-windows"]
+lane = "gateway"
+platforms = ["linux", "windows"]
+always = false
+
+[[contract.supporting_tests]]
+inventory_id = "TEST-ec44cda7d146d958"
+file = "sudhir_codex/tests/test_adapter.py"
+test_name = "test_adapter.AdapterTests.test_maps_reasoning_token_usage_to_responses_details"
+runner = "python-unittest"
+platforms = ["linux", "windows"]
+expanded_by = ["WRAPPER-49db5d16599671c6", "WRAPPER-b470154ca53f6618"]
+
+[[contract]]
+id = "SC-REASONING-004"
+behavior = "Native encrypted reasoning is replayed only to the exact provider/model/API/base-URL route that created it"
+patch = "fork[reasoning]"
+source = ["sudhir_codex/src/sudhir_codex_gateway/openai_responses.py"]
+test_file = "sudhir_codex/tests/contracts/test_reasoning.py"
+test_runner = "python-unittest"
+test_name = "ReasoningContracts.test_encrypted_reasoning_is_route_scoped"
+acceptance_case = "encrypted-reasoning-route-scope"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux", "github-windows"]
+lane = "gateway"
+platforms = ["linux", "windows"]
+always = false
+
+[[contract.supporting_tests]]
+inventory_id = "TEST-3c432bd603388c4b"
+file = "sudhir_codex/tests/test_anthropic.py"
+test_name = "test_anthropic.AnthropicAdapterTests.test_round_trips_thinking_text_and_opaque_signature"
+runner = "python-unittest"
+platforms = ["linux", "windows"]
+expanded_by = ["WRAPPER-49db5d16599671c6", "WRAPPER-b470154ca53f6618"]
+
+[[contract]]
+id = "SC-HISTORY-001"
+behavior = "Historical exec_command is serializable for replay but is not advertised or callable without current authorization"
+patch = "fork[history-tools]"
+source = ["sudhir_codex/src/sudhir_codex_gateway/adapter.py", "sudhir_codex/src/sudhir_codex_gateway/openai_responses.py"]
+test_file = "sudhir_codex/tests/contracts/test_history_tools.py"
+test_runner = "python-unittest"
+test_name = "HistoryToolContracts.test_history_exec_is_serializable_but_not_callable"
+acceptance_case = "history-exec-model-switch"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux", "github-windows"]
+lane = "gateway"
+platforms = ["linux", "windows"]
+always = false
+
+[[contract.supporting_tests]]
+inventory_id = "TEST-09c9fb1744ab0112"
+file = "sudhir_codex/tests/test_openai_responses.py"
+test_name = "test_openai_responses.OpenAIResponsesTests.test_decodes_custom_and_namespaced_tool_calls_for_codex"
+runner = "python-unittest"
+platforms = ["linux", "windows"]
+expanded_by = ["WRAPPER-49db5d16599671c6", "WRAPPER-b470154ca53f6618"]
+
+[[contract.supporting_tests]]
+inventory_id = "TEST-1c59a8435d630a4e"
+file = "sudhir_codex/tests/test_anthropic.py"
+test_name = "test_anthropic.AnthropicAdapterTests.test_translates_tools_images_and_tool_history"
+runner = "python-unittest"
+platforms = ["linux", "windows"]
+expanded_by = ["WRAPPER-49db5d16599671c6", "WRAPPER-b470154ca53f6618"]
+
+[[contract.supporting_tests]]
+inventory_id = "TEST-2257454f1a54ede7"
+file = "sudhir_codex/tests/test_openai_responses.py"
+test_name = "test_openai_responses.OpenAIResponsesTests.test_history_only_exec_command_is_serializable_but_not_callable"
+runner = "python-unittest"
+platforms = ["linux", "windows"]
+expanded_by = ["WRAPPER-49db5d16599671c6", "WRAPPER-b470154ca53f6618"]
+
+[[contract.supporting_tests]]
+inventory_id = "TEST-44d68b686a955217"
+file = "sudhir_codex/tests/test_adapter.py"
+test_name = "test_adapter.AdapterTests.test_preserves_tool_history_for_next_chat_turn"
+runner = "python-unittest"
+platforms = ["linux", "windows"]
+expanded_by = ["WRAPPER-49db5d16599671c6", "WRAPPER-b470154ca53f6618"]
+
+[[contract.supporting_tests]]
+inventory_id = "TEST-489c85a60ff95026"
+file = "sudhir_codex/tests/test_openai_responses.py"
+test_name = "test_openai_responses.OpenAIResponsesTests.test_historical_discovered_tools_require_active_tool_search"
+runner = "python-unittest"
+platforms = ["linux", "windows"]
+expanded_by = ["WRAPPER-49db5d16599671c6", "WRAPPER-b470154ca53f6618"]
+
+[[contract.supporting_tests]]
+inventory_id = "TEST-8346efef75ca4e62"
+file = "sudhir_codex/tests/test_adapter.py"
+test_name = "test_adapter.AdapterTests.test_history_only_exec_command_is_serializable_but_not_callable"
+runner = "python-unittest"
+platforms = ["linux", "windows"]
+expanded_by = ["WRAPPER-49db5d16599671c6", "WRAPPER-b470154ca53f6618"]
+
+[[contract.supporting_tests]]
+inventory_id = "TEST-aa135c491aa3983c"
+file = "sudhir_codex/tests/test_openai_responses.py"
+test_name = "test_openai_responses.OpenAIResponsesTests.test_exposes_tools_returned_by_codex_tool_search"
+runner = "python-unittest"
+platforms = ["linux", "windows"]
+expanded_by = ["WRAPPER-49db5d16599671c6", "WRAPPER-b470154ca53f6618"]
+
+[[contract.supporting_tests]]
+inventory_id = "TEST-c726bc43e966d5cd"
+file = "sudhir_codex/tests/test_openai_responses.py"
+test_name = "test_openai_responses.OpenAIResponsesTests.test_translates_codex_tools_and_preserves_responses_history"
+runner = "python-unittest"
+platforms = ["linux", "windows"]
+expanded_by = ["WRAPPER-49db5d16599671c6", "WRAPPER-b470154ca53f6618"]
+
+[[contract]]
+id = "SC-COMPACTION-001"
+behavior = "Genuine pressure compacts and samples with the newly selected model, never the previous provider"
+patch = "fork[model-continuity]"
+source = ["codex-rs/core/src/session/turn.rs", "codex-rs/core/src/session/turn_context.rs"]
+test_file = "codex-rs/core/tests/suite/sudhir_model_continuity.rs"
+test_runner = "rust-nextest"
+test_name = "pressure_compaction_uses_selected_model"
+acceptance_case = "selected-model-pressure"
+acceptance_mode = "artifact"
+acceptance_hosts = ["staged-macos"]
+lane = "core"
+platforms = ["linux"]
+always = false
+
+[[contract.supporting_tests]]
+inventory_id = "TEST-02ddb59de2c52fc7"
+file = "codex-rs/core/tests/suite/compact.rs"
+test_name = "model_switch_to_selected_model_never_requests_previous_custom_model"
+runner = "rust-nextest"
+platforms = ["linux"]
+expanded_by = ["WRAPPER-8825d48d52452419"]
+
+[[contract.supporting_tests]]
+inventory_id = "TEST-d9b574e9aa017f7f"
+file = "codex-rs/core/tests/suite/compact.rs"
+test_name = "pre_sampling_compact_uses_selected_model_on_switch_to_smaller_context_model"
+runner = "rust-nextest"
+platforms = ["linux"]
+expanded_by = ["WRAPPER-8825d48d52452419"]
+
+[[contract]]
+id = "SC-COMPACTION-002"
+behavior = "Model, provider, or comp_hash change alone never causes compaction"
+patch = "fork[model-continuity]"
+source = ["codex-rs/core/src/session/turn.rs", "codex-rs/core/src/session/turn_context.rs"]
+test_file = "codex-rs/core/tests/suite/sudhir_model_continuity.rs"
+test_runner = "rust-nextest"
+test_name = "model_provider_and_hash_change_do_not_compact_without_pressure"
+acceptance_case = "same-model-cross-provider"
+acceptance_mode = "artifact"
+acceptance_hosts = ["staged-macos"]
+lane = "core"
+platforms = ["linux"]
+always = false
+
+[[contract.supporting_tests]]
+inventory_id = "TEST-54d6f58f2480b863"
+file = "codex-rs/core/tests/suite/compact.rs"
+test_name = "model_switch_with_changed_comp_hash_does_not_compact_without_pressure"
+runner = "rust-nextest"
+platforms = ["linux"]
+expanded_by = ["WRAPPER-8825d48d52452419"]
+
+[[contract]]
+id = "SC-COMPACTION-003"
+behavior = "Resuming a legacy rollout with an old synthetic hash cannot route a request to the old provider or compact without pressure"
+patch = "fork[model-continuity]"
+source = ["codex-rs/core/src/session/turn.rs", "codex-rs/core/src/session/turn_context.rs"]
+test_file = "codex-rs/core/tests/suite/sudhir_model_continuity.rs"
+test_runner = "rust-nextest"
+test_name = "legacy_hash_resume_uses_selected_model_without_spurious_compaction"
+acceptance_case = "legacy-rollout-resume"
+acceptance_mode = "artifact"
+acceptance_hosts = ["staged-macos"]
+lane = "core"
+platforms = ["linux"]
+always = false
+
+[[contract.supporting_tests]]
+inventory_id = "TEST-93534dd7ea4584db"
+file = "codex-rs/core/tests/suite/compact.rs"
+test_name = "resumed_legacy_comp_hash_does_not_trigger_or_route_compaction"
+runner = "rust-nextest"
+platforms = ["linux"]
+expanded_by = ["WRAPPER-8825d48d52452419"]
+
+[[contract.supporting_tests]]
+inventory_id = "TEST-e1bc3656ca69d709"
+file = "codex-rs/core/tests/suite/compact.rs"
+test_name = "pre_sampling_compact_after_resume_uses_selected_smaller_model"
+runner = "rust-nextest"
+platforms = ["linux"]
+expanded_by = ["WRAPPER-8825d48d52452419"]
+
+[[contract]]
+id = "SC-COMPACTION-004"
+behavior = "Synthesized Pi and Cursor catalog entries contain no fabricated comp_hash"
+patch = "fork[model-continuity]"
+source = ["sudhir_codex/src/sudhir_codex_gateway/catalog.py", "sudhir_codex/src/sudhir_codex_gateway/cursor_catalog.py"]
+test_file = "sudhir_codex/tests/contracts/test_catalog.py"
+test_runner = "python-unittest"
+test_name = "CatalogContracts.test_pi_and_cursor_models_have_no_synthetic_comp_hash"
+acceptance_case = "catalog-no-synthetic-hash"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux", "github-windows"]
+lane = "gateway"
+platforms = ["linux", "windows"]
+always = false
+
+[[contract]]
+id = "SC-OAUTH-001"
+behavior = "Python delegates any Pi-registered OAuth provider without xAI or xai2 allowlists or hand-written refresh code"
+patch = "fork[oauth]"
+source = ["sudhir_codex/src/sudhir_codex_gateway/credentials.py", "sudhir_codex/src/sudhir_codex_gateway/pi_auth_worker.py"]
+test_file = "sudhir_codex/tests/contracts/test_oauth.py"
+test_runner = "python-unittest"
+test_name = "OAuthContracts.test_arbitrary_pi_oauth_provider_needs_no_gateway_allowlist"
+acceptance_case = "generic-pi-oauth"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux", "github-windows"]
+lane = "gateway"
+platforms = ["linux", "windows"]
+always = false
+
+[[contract.supporting_tests]]
+inventory_id = "TEST-dc6e68cb0fa4ea66"
+file = "sudhir_codex/tests/test_credentials.py"
+test_name = "test_credentials.CredentialTests.test_arbitrary_oauth_provider_delegates_to_pi_without_allowlist"
+runner = "python-unittest"
+platforms = ["linux", "windows"]
+expanded_by = ["WRAPPER-49db5d16599671c6", "WRAPPER-b470154ca53f6618"]
+
+[[contract]]
+id = "SC-OAUTH-WORKER-001"
+behavior = "The pinned Node worker resolves an arbitrary OAuth provider through its ordinary Pi extension"
+patch = "fork[oauth]"
+source = ["sudhir_codex/cursor_worker/pi-auth-worker.mjs"]
+test_file = "sudhir_codex/cursor_worker/pi-auth-worker.test.mjs"
+test_runner = "node-test"
+test_name = "resolves an arbitrary OAuth provider through its Pi extension"
+acceptance_case = "generic-pi-oauth-worker"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux", "github-windows"]
+lane = "node"
+platforms = ["linux", "windows"]
+always = false
+primary_inventory_ids = ["WF-912e2e0854e2ef07", "WF-a7aedd48addaaf9e"]
+
+[[contract.ci_checks]]
+inventory_id = "WF-14d07bcd86943ddd"
+workflow = ".github/workflows/source-ci.yml"
+job = "gateway-windows"
+step = "Check the pinned Windows Node workers"
+command = "node --check pi-auth-worker.mjs"
+working_directory = "sudhir_codex/cursor_worker"
+shell = "pwsh"
+platforms = ["windows"]
+
+[[contract.ci_checks]]
+inventory_id = "WF-26115b281ccae8d9"
+workflow = ".github/workflows/source-ci.yml"
+job = "gateway-windows"
+step = "Check the pinned Windows Node workers"
+command = "npm ci --omit=dev"
+working_directory = "sudhir_codex/cursor_worker"
+shell = "pwsh"
+platforms = ["windows"]
+
+[[contract.ci_checks]]
+parent_inventory_id = "WF-2ece06693e9d2733"
+workflow = ".github/workflows/source-ci.yml"
+job = "gateway-windows"
+step = "Check the pinned Windows Node workers"
+command = "npm ls --omit=dev @cursor/sdk @cursor/sdk-win32-x64 @earendil-works/pi-coding-agent"
+derived_command = "npm ls --omit=dev @earendil-works/pi-coding-agent"
+working_directory = "sudhir_codex/cursor_worker"
+shell = "pwsh"
+platforms = ["windows"]
+
+[[contract.ci_checks]]
+inventory_id = "WF-76bd44f95e1e80e6"
+workflow = ".github/workflows/source-ci.yml"
+job = "gateway-linux"
+step = "Check the pinned Node workers"
+command = "node --check pi-auth-worker.mjs"
+working_directory = "sudhir_codex/cursor_worker"
+shell = ""
+platforms = ["linux"]
+
+[[contract.ci_checks]]
+inventory_id = "WF-95d95f8824bd7e4e"
+workflow = ".github/workflows/source-ci.yml"
+job = "gateway-linux"
+step = "Check the pinned Node workers"
+command = "npm ci --omit=dev"
+working_directory = "sudhir_codex/cursor_worker"
+shell = ""
+platforms = ["linux"]
+
+[[contract.ci_checks]]
+parent_inventory_id = "WF-a6086762317b575a"
+workflow = ".github/workflows/source-ci.yml"
+job = "gateway-linux"
+step = "Check the pinned Node workers"
+command = "npm ls --omit=dev @cursor/sdk @earendil-works/pi-coding-agent"
+derived_command = "npm ls --omit=dev @earendil-works/pi-coding-agent"
+working_directory = "sudhir_codex/cursor_worker"
+shell = ""
+platforms = ["linux"]
+
+[[contract]]
+id = "SC-XAI-001"
+behavior = "xAI Responses routes use the Responses transport and normal provider-scoped reasoning replay"
+patch = "fork[oauth]"
+source = ["sudhir_codex/src/sudhir_codex_gateway/app.py", "sudhir_codex/src/sudhir_codex_gateway/openai_responses.py"]
+test_file = "sudhir_codex/tests/contracts/test_oauth.py"
+test_runner = "python-unittest"
+test_name = "OAuthContracts.test_xai_route_uses_responses_without_hardcoding"
+acceptance_case = "xai-responses-route"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux", "github-windows"]
+lane = "gateway"
+platforms = ["linux", "windows"]
+always = false
+
+[[contract.supporting_tests]]
+inventory_id = "TEST-0d9e8cfaada710b4"
+file = "sudhir_codex/tests/test_app.py"
+test_name = "test_app.GatewayAppTests.test_xai_grok45_uses_responses_transport"
+runner = "python-unittest"
+platforms = ["linux", "windows"]
+expanded_by = ["WRAPPER-49db5d16599671c6", "WRAPPER-b470154ca53f6618"]
+
+[[contract]]
+id = "SC-AGENTS-001"
+behavior = "Under sudhir_agents, every available parent and child model/provider class uses plaintext inter-agent messages; no cross-provider child receives encrypted_content"
+patch = "fork[agents]"
+source = ["codex-rs/core/src/tools/handlers/multi_agents_v2.rs"]
+test_file = "codex-rs/core/tests/suite/sudhir_cross_provider_agents.rs"
+test_runner = "rust-nextest"
+test_name = "all_parent_and_child_routes_use_plaintext_sudhir_agent_messages"
+acceptance_case = "sol-parent-luna-child"
+acceptance_mode = "artifact"
+acceptance_hosts = ["staged-macos"]
+lane = "core"
+platforms = ["linux"]
+always = true
+
+[[contract.supporting_tests]]
+inventory_id = "TEST-a24260de61f0a7e2"
+file = "codex-rs/core/tests/suite/subagent_notifications.rs"
+test_name = "plaintext_pi_multi_agent_v2_spawn_sends_agent_message_to_child"
+runner = "rust-nextest"
+platforms = ["linux"]
+expanded_by = ["WRAPPER-8825d48d52452419"]
+
+[[contract]]
+id = "SC-AGENTS-002"
+behavior = "One response can emit and preserve six independent agent calls"
+patch = "fork[agents]"
+source = ["sudhir_codex/src/sudhir_codex_gateway/adapter.py", "sudhir_codex/src/sudhir_codex_gateway/launcher.py"]
+test_file = "sudhir_codex/tests/contracts/test_agents.py"
+test_runner = "python-unittest"
+test_name = "AgentContracts.test_six_agent_calls_are_preserved"
+acceptance_case = "six-agent-capacity"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux", "github-windows"]
+lane = "gateway"
+platforms = ["linux", "windows"]
+always = false
+
+[[contract]]
+id = "SC-PI-TOOLS-001"
+behavior = "Core does not advertise unsupported OpenAI-hosted search or image tools to Pi routes"
+patch = "fork[agents]"
+source = ["codex-rs/core/src/tools/spec_plan.rs"]
+test_file = "codex-rs/core/tests/suite/sudhir_cross_provider_agents.rs"
+test_runner = "rust-nextest"
+test_name = "pi_routes_suppress_provider_hosted_tools"
+acceptance_case = "pi-hosted-tool-suppression"
+acceptance_mode = "artifact"
+acceptance_hosts = ["staged-macos"]
+lane = "core"
+platforms = ["linux"]
+always = false
+
+[[contract.supporting_tests]]
+inventory_id = "TEST-635d421769b036da"
+file = "codex-rs/core/src/tools/spec_plan_tests.rs"
+test_name = "hosted_web_search_and_standalone_image_generation_follow_runtime_gates"
+runner = "rust-nextest"
+platforms = ["linux"]
+expanded_by = ["WRAPPER-8825d48d52452419"]
+
+[[contract]]
+id = "SC-PI-TOOLS-002"
+behavior = "The translated Pi gateway rejects provider-hosted search or image payloads instead of forwarding them upstream"
+patch = "fork[agents]"
+source = ["sudhir_codex/src/sudhir_codex_gateway/adapter.py"]
+test_file = "sudhir_codex/tests/contracts/test_agents.py"
+test_runner = "python-unittest"
+test_name = "AgentContracts.test_gateway_rejects_provider_hosted_tools_for_pi"
+acceptance_case = "pi-hosted-tool-gateway-rejection"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux", "github-windows"]
+lane = "gateway"
+platforms = ["linux", "windows"]
+always = false
+
+[[contract]]
+id = "SC-TUI-001"
+behavior = "/model exposes and searches the merged model/provider catalog"
+patch = "fork[tui]"
+source = ["codex-rs/tui/src/chatwidget/model_popups.rs"]
+test_file = "codex-rs/tui/src/chatwidget/tests/sudhir_model_picker.rs"
+test_runner = "rust-nextest"
+test_name = "picker_searches_merged_model_names_and_providers"
+acceptance_case = "merged-model-picker"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux"]
+lane = "tui-app-server"
+platforms = ["linux"]
+always = false
+
+[[contract.supporting_tests]]
+inventory_id = "WF-3545f25aa1effab5"
+file = "codex-rs/tui/src/chatwidget/tests/popups_and_settings.rs"
+test_name = "model_picker_searches_model_names_and_providers"
+runner = "rust-nextest"
+workflow = ".github/workflows/source-ci.yml"
+job = "rust-focused"
+step = "Run fork regressions"
+command = "just test -p codex-tui model_picker_searches_model_names_and_providers"
+working_directory = "codex-rs"
+shell = ""
+platforms = ["linux"]
+
+[[contract]]
+id = "SC-TUI-002"
+behavior = "Max and Ultra appear and Option-plus-dot reaches them when the selected model advertises them"
+patch = "fork[tui]"
+source = ["codex-rs/tui/src/chatwidget/model_popups.rs", "codex-rs/tui/src/chatwidget/reasoning_shortcuts.rs"]
+test_file = "codex-rs/tui/src/chatwidget/tests/sudhir_model_picker.rs"
+test_runner = "rust-nextest"
+test_name = "max_and_ultra_are_visible_and_keyboard_reachable"
+acceptance_case = "max-ultra-effort"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux"]
+lane = "tui-app-server"
+platforms = ["linux"]
+always = false
+
+[[contract.ci_checks]]
+inventory_id = "WF-18072cdd53df8c28"
+workflow = ".github/workflows/source-ci.yml"
+job = "rust-focused"
+step = "Run fork regressions"
+command = "just test -p codex-tui reasoning"
+working_directory = "codex-rs"
+shell = ""
+platforms = ["linux"]
+
+[[contract]]
+id = "SC-TUI-003"
+behavior = "Model or effort changes affect only the active task; app-server batch writes retain unrelated settings without rewriting defaults"
+patch = "fork[tui]"
+source = ["codex-rs/tui/src/app/config_persistence.rs", "codex-rs/tui/src/app/event_dispatch.rs", "codex-rs/app-server/src/request_processors/config_processor.rs"]
+test_file = "codex-rs/app-server/tests/suite/v2/sudhir_active_task_config.rs"
+test_runner = "rust-nextest"
+test_name = "active_selection_never_rewrites_new_task_defaults"
+acceptance_case = "active-task-only-config"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux"]
+lane = "tui-app-server"
+platforms = ["linux"]
+always = false
+
+[[contract.supporting_tests]]
+inventory_id = "WF-1d0bcefe8ce11ab7"
+file = "codex-rs/app-server/tests/suite/v2/config_rpc.rs"
+test_name = "config_batch_write_keeps_model_defaults_while_writing_other_settings"
+runner = "rust-nextest"
+workflow = ".github/workflows/source-ci.yml"
+job = "rust-focused"
+step = "Run fork regressions"
+command = "just test -p codex-app-server config_batch_write_keeps_model_defaults_while_writing_other_settings"
+working_directory = "codex-rs"
+shell = ""
+platforms = ["linux"]
+
+[[contract.supporting_tests]]
+inventory_id = "WF-401716ef18ede916"
+file = "codex-rs/tui/src/app/config_persistence.rs"
+test_name = "active_reasoning_effort_does_not_change_new_task_default"
+runner = "rust-nextest"
+workflow = ".github/workflows/source-ci.yml"
+job = "rust-focused"
+step = "Run fork regressions"
+command = "just test -p codex-tui active_reasoning_effort_does_not_change_new_task_default"
+working_directory = "codex-rs"
+shell = ""
+platforms = ["linux"]
+
+[[contract.supporting_tests]]
+inventory_id = "WF-585998c00697f315"
+file = "codex-rs/tui/src/app/config_persistence.rs"
+test_name = "active_plan_reasoning_effort_does_not_change_new_task_default"
+runner = "rust-nextest"
+workflow = ".github/workflows/source-ci.yml"
+job = "rust-focused"
+step = "Run fork regressions"
+command = "just test -p codex-tui active_plan_reasoning_effort_does_not_change_new_task_default"
+working_directory = "codex-rs"
+shell = ""
+platforms = ["linux"]
+
+[[contract.supporting_tests]]
+inventory_id = "WF-a58c243d8b30d9d5"
+file = "codex-rs/tui/src/chatwidget/tests/slash_commands.rs"
+test_name = "queued_settings_selection_applies_before_next_input"
+runner = "rust-nextest"
+workflow = ".github/workflows/source-ci.yml"
+job = "rust-focused"
+step = "Run fork regressions"
+command = "just test -p codex-tui queued_settings_selection_applies_before_next_input"
+working_directory = "codex-rs"
+shell = ""
+platforms = ["linux"]
+
+[[contract]]
+id = "SC-SOURCE-001"
+behavior = "Public release source contains only the approved workflow and source surface and no private operational files or personal paths"
+patch = "fork[packaging]"
+source = [".github/workflows/source-ci.yml", "scripts/tests/run_sudhir_fork_contracts.py", "scripts/tests/staged_artifact_acceptance.py", "scripts/tests/verify_sudhir_fork_contracts.py", "scripts/tests/sudhir_native_packaging_contracts.py"]
+test_file = "scripts/tests/sudhir_native_packaging_contracts.py"
+test_runner = "python-unittest"
+test_name = "NativePackagingContracts.test_public_source_boundaries"
+acceptance_case = "public-source-boundary"
+acceptance_mode = "source"
+acceptance_hosts = ["github-linux"]
+lane = "packaging"
+platforms = ["linux"]
+always = false
+
+[[contract.supporting_tests]]
+register_id = "REGTEST-prebuild-no-rust"
+file = "scripts/tests/sudhir_native_packaging_contracts.py"
+test_name = "NativePackagingContracts.test_prebuild_gate_never_compiles_or_runs_rust_tests"
+runner = "python-unittest"
+platforms = ["linux"]
+
+[[contract.supporting_tests]]
+register_id = "REGTEST-prebuild-evidence"
+file = "scripts/tests/sudhir_native_packaging_contracts.py"
+test_name = "NativePackagingContracts.test_prebuild_evidence_does_not_claim_uncompiled_rust_contracts"
+runner = "python-unittest"
+platforms = ["linux"]
+
+[[contract.supporting_tests]]
+register_id = "REGTEST-bootstrap-register-native"
+file = "scripts/tests/sudhir_native_packaging_contracts.py"
+test_name = "NativePackagingContracts.test_bootstrap_completeness_excludes_register_native_tests"
+runner = "python-unittest"
+platforms = ["linux"]
+
+[[contract.ci_checks]]
+inventory_id = "WF-4547f515ad9376d5"
+workflow = ".github/workflows/source-ci.yml"
+job = "rust-focused"
+step = "Check formatting"
+command = "just fmt-check"
+working_directory = "codex-rs"
+shell = ""
+platforms = ["linux"]
+
+[[contract.ci_checks]]
+inventory_id = "WF-ea63e5ee3d01411c"
+workflow = ".github/workflows/source-ci.yml"
+job = "public-source"
+step = "Check licence, files, and workflow surface"
+command = "set -euo pipefail\ntest -f LICENSE\ntest -f NOTICE\ntest -f MODIFICATIONS.md\ntest -f .github/upstream-base.txt\n\nworkflow_count=\"$(\n  find .github/workflows -maxdepth 1 -type f \\\n    \\( -name '*.yml' -o -name '*.yaml' \\) |\n    wc -l |\n    tr -d ' '\n)\"\n[[ \"$workflow_count\" == \"3\" ]]\n\nforbidden_paths=(\n  documents/BACKEND-MONTHLY-UPGRADE.md\n  documents/FRONTEND-UPDATE.md\n  documents/README.md\n  documents/THREAD-IMPORT.md\n  documents/plan-audit-implementation/sudhir_codex_audit.md\n  documents/plan-audit-implementation/sudhir_codex_implementation.md\n  documents/plan-audit-implementation/sudhir_codex_plan.md\n  scripts/normalize-sudhir-thread-providers.rb\n)\nfor path in \"${forbidden_paths[@]}\"; do\n  if git ls-files --error-unmatch \"$path\" >/dev/null 2>&1; then\n    echo \"Private operational file is tracked: $path\" >&2\n    exit 1\n  fi\ndone\n\nif git ls-files | grep -E '(^|/)(node_modules|target|dist|\\.venv|\\.toolchains)(/|$)'; then\n  echo \"Generated or machine-local content is tracked\" >&2\n  exit 1\nfi\nprivileged_pr_trigger=\"pull_request\"\"_target\"\nif git grep -n \"$privileged_pr_trigger\" -- .github/workflows; then\n  echo \"A privileged pull-request trigger is forbidden\" >&2\n  exit 1\nfi\nif git grep -nE '/Users/|/Applications/Sudhir-Codex\\.app' \\\n  -- README.md MODIFICATIONS.md sudhir_codex/README.md; then\n  echo \"Personal or private desktop paths remain in public documentation\" >&2\n  exit 1\nfi"
+working_directory = ""
+shell = "bash"
+platforms = ["linux"]
+
+[[contract]]
+id = "SC-PACKAGING-001"
+behavior = "Native archive layout and SHA256SUMS agree exactly"
+patch = "fork[packaging]"
+source = [".github/workflows/native-release.yml", "scripts/install-sudhir-codex", "scripts/sudhir-codex.ps1"]
+test_file = "scripts/tests/sudhir_native_packaging_contracts.py"
+test_runner = "python-unittest"
+test_name = "NativePackagingContracts.test_archive_layout_and_checksums"
+acceptance_case = "native-archive-integrity"
+acceptance_mode = "artifact"
+acceptance_hosts = ["staged-macos"]
+lane = "packaging"
+platforms = ["linux", "windows"]
+always = false
+
+[[contract.supporting_tests]]
+register_id = "REGTEST-native-binary-once"
+file = "scripts/tests/sudhir_native_packaging_contracts.py"
+test_name = "NativePackagingContracts.test_release_builds_each_native_binary_once"
+runner = "python-unittest"
+platforms = ["linux"]
+
+[[contract.supporting_tests]]
+register_id = "REGTEST-native-preflight-order"
+file = "scripts/tests/sudhir_native_packaging_contracts.py"
+test_name = "NativePackagingContracts.test_every_native_compile_waits_for_dependency_preflight"
+runner = "python-unittest"
+platforms = ["linux"]
+
+[[contract.ci_checks]]
+inventory_id = "WF-7ce623fc10ce67c3"
+workflow = ".github/workflows/source-ci.yml"
+job = "gateway-linux"
+step = "Check and test the gateway"
+command = "bash scripts/tests/install-sudhir-codex.tests.sh"
+working_directory = ""
+shell = ""
+platforms = ["linux"]
+
+[[contract]]
+id = "SC-PACKAGING-002"
+behavior = "The extracted native archive starts the CLI, app-server help, and MCP help before installation"
+patch = "fork[packaging]"
+source = [".github/workflows/native-release.yml", "scripts/install-sudhir-codex", "scripts/sudhir-codex.ps1"]
+test_file = "scripts/tests/sudhir_native_packaging_contracts.py"
+test_runner = "python-unittest"
+test_name = "NativePackagingContracts.test_extracted_archive_starts_required_commands"
+acceptance_case = "staged-native-startup"
+acceptance_mode = "artifact"
+acceptance_hosts = ["staged-macos"]
+lane = "packaging"
+platforms = ["linux", "windows"]
+always = false
+
+[[contract]]
+id = "SC-WINDOWS-001"
+behavior = "Windows Python and exact rusty_v8 library and binding checksums verify before compilation"
+patch = "fork[packaging]"
+source = [".github/actions/setup-rusty-v8/action.yml", ".github/workflows/native-release.yml"]
+test_file = "scripts/tests/sudhir_windows_packaging_contracts.py"
+test_runner = "python-unittest"
+test_name = "WindowsPackagingContracts.test_python_and_v8_preflight_precedes_compile"
+acceptance_case = "windows-v8-preflight"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-windows"]
+lane = "packaging"
+platforms = ["windows"]
+always = false
+
+[[contract]]
+id = "SC-WINDOWS-002"
+behavior = "The packaged Windows launcher and private gateway start, report healthy, and stop natively"
+patch = "fork[packaging]"
+source = ["scripts/sudhir-codex.ps1", "sudhir_codex/src/sudhir_codex_gateway/platform_support.py", "sudhir_codex/src/sudhir_codex_gateway/management.py"]
+test_file = "scripts/tests/sudhir_windows_packaging_contracts.py"
+test_runner = "python-unittest"
+test_name = "WindowsPackagingContracts.test_native_gateway_lifecycle"
+acceptance_case = "windows-native-startup"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-windows"]
+lane = "packaging"
+platforms = ["windows"]
+always = false
+
+[[contract.ci_checks]]
+inventory_id = "WF-752c57dbaf58926a"
+workflow = ".github/workflows/source-ci.yml"
+job = "gateway-windows"
+step = "Smoke-test Windows installation and gateway lifecycle"
+command = "$SmokeRoot = Join-Path $env:RUNNER_TEMP \"openmodels-installer-smoke\"\n$ArchiveRoot = Join-Path $SmokeRoot \"archive\"\n$InstallRoot = Join-Path $SmokeRoot \"checkout\"\n$State = Join-Path $SmokeRoot \"state\"\n$PiAgentDir = Join-Path $SmokeRoot \"pi-agent\"\nNew-Item -ItemType Directory -Path $ArchiveRoot, $InstallRoot -Force | Out-Null\n$Binaries = @(\n  \"codex.exe\",\n  \"codex-app-server.exe\",\n  \"codex-code-mode-host.exe\",\n  \"codex-command-runner.exe\",\n  \"codex-responses-api-proxy.exe\",\n  \"codex-windows-sandbox-setup.exe\"\n)\nforeach ($Binary in $Binaries) {\n  Set-Content -LiteralPath (Join-Path $ArchiveRoot $Binary) -Value \"smoke\" -Encoding Ascii\n}\n$Archive = Join-Path $env:RUNNER_TEMP \"codex-with-openmodels-x86_64-pc-windows-msvc.zip\"\nCompress-Archive -Path (Join-Path $ArchiveRoot \"*.exe\") -DestinationPath $Archive\n$Checksums = Join-Path $env:RUNNER_TEMP \"SHA256SUMS\"\n$Hash = (Get-FileHash -LiteralPath $Archive -Algorithm SHA256).Hash.ToLowerInvariant()\n\"$Hash  $([System.IO.Path]::GetFileName($Archive))\" |\n  Set-Content -LiteralPath $Checksums -Encoding Ascii\n\nNew-Item -ItemType Directory -Path `\n  (Join-Path $InstallRoot \"codex-rs\"), `\n  (Join-Path $InstallRoot \"sudhir_codex\\cursor_worker\") `\n  -Force | Out-Null\nCopy-Item -LiteralPath .\\sudhir_codex\\pyproject.toml `\n  -Destination (Join-Path $InstallRoot \"sudhir_codex\\pyproject.toml\")\nCopy-Item -LiteralPath .\\sudhir_codex\\src `\n  -Destination (Join-Path $InstallRoot \"sudhir_codex\\src\") `\n  -Recurse\nCopy-Item -Path .\\sudhir_codex\\cursor_worker\\package*.json `\n  -Destination (Join-Path $InstallRoot \"sudhir_codex\\cursor_worker\")\nCopy-Item -LiteralPath .\\sudhir_codex\\cursor_worker\\worker.mjs `\n  -Destination (Join-Path $InstallRoot \"sudhir_codex\\cursor_worker\\worker.mjs\")\nCopy-Item -LiteralPath .\\sudhir_codex\\cursor_worker\\pi-auth-worker.mjs `\n  -Destination (Join-Path $InstallRoot \"sudhir_codex\\cursor_worker\\pi-auth-worker.mjs\")\n\n& .\\scripts\\sudhir-codex.ps1 `\n  -Archive $Archive `\n  -Checksums $Checksums `\n  -Root $InstallRoot `\n  -State $State `\n  -PiAgentDir $PiAgentDir\n\n$GatewayPython = Join-Path $InstallRoot \".venv\\Scripts\\python.exe\"\n$env:SUDHIR_CODEX_ROOT = $InstallRoot\n$env:SUDHIR_CODEX_STATE = $State\n$env:SUDHIR_CODEX_PI_AGENT_DIR = $PiAgentDir\n$Started = $false\ntry {\n  & $GatewayPython -m sudhir_codex_gateway.management start\n  $GatewayStartExit = $LASTEXITCODE\n  if ($GatewayStartExit -ne 0) {\n    $GatewayLog = Join-Path $State \"gateway\\gateway.log\"\n    if (Test-Path -LiteralPath $GatewayLog -PathType Leaf) {\n      Get-Content -LiteralPath $GatewayLog\n    }\n    throw \"Gateway start smoke failed\"\n  }\n  $Started = $true\n\n  $StatusJson = (& $GatewayPython -m sudhir_codex_gateway.management status --json) -join \"`n\"\n  if ($LASTEXITCODE -ne 0) { throw \"Gateway status smoke failed\" }\n  $Status = $StatusJson | ConvertFrom-Json\n  if (-not $Status.running) { throw \"Gateway status did not report running\" }\n}\nfinally {\n  if ($Started) {\n    & $GatewayPython -m sudhir_codex_gateway.management stop\n    if ($LASTEXITCODE -ne 0) { throw \"Gateway stop smoke failed\" }\n  }\n}\nif (Test-Path -LiteralPath (Join-Path $State \"gateway\\gateway.pid\")) {\n  throw \"Gateway PID file remained after stop\"\n}"
+working_directory = ""
+shell = "pwsh"
+platforms = ["windows"]
