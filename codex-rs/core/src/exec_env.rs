@@ -12,6 +12,11 @@ pub use codex_protocol::shell_environment::CODEX_THREAD_ID_ENV_VAR;
 /// overwrite this value, so it must not be treated as proof of enforcement.
 pub const CODEX_PERMISSION_PROFILE_ENV_VAR: &str = "CODEX_PERMISSION_PROFILE";
 
+/// Authenticates Codex with the private Sudhir gateway. The Codex process needs
+/// this value for provider requests, but model-invoked child processes must
+/// never inherit it.
+pub(crate) const SUDHIR_CODEX_GATEWAY_TOKEN_ENV_VAR: &str = "SUDHIR_CODEX_GATEWAY_TOKEN";
+
 /// Construct an environment map based on the rules in the specified policy. The
 /// resulting map can be passed directly to `Command::envs()` after calling
 /// `env_clear()` to ensure no unintended variables are leaked to the spawned
