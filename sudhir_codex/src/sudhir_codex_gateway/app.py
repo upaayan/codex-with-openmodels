@@ -31,6 +31,7 @@ from .cursor_catalog import cursor_route
 from .cursor_prompt import build_cursor_turn
 from .cursor_worker import CursorWorker
 from .cursor_worker import CursorWorkerClient
+from .deepseek_diagnostics import DeepSeekDiagnosticCapture
 from .errors import GatewayError
 from .openai_responses import openai_response_to_sse
 from .openai_responses import responses_to_openai_request
@@ -195,6 +196,9 @@ class GatewayApp:
             trust_env=True,
         )
         self.route_audit = RouteAudit(settings.route_audit_path)
+        self.deepseek_diagnostics = DeepSeekDiagnosticCapture.from_environment(
+            settings.gateway_state_dir
+        )
         self._catalog_lock = threading.Lock()
         self._catalog: Catalog | None = None
         self._catalog_identity: tuple[int, int, int, int] | None = None
@@ -417,12 +421,28 @@ class GatewayApp:
                 "pi_provider_invalid_json",
                 f"Provider {model.provider_id!r} returned invalid JSON",
             ) from exc
-        if model.api == "openai-responses":
-            sse = openai_response_to_sse(upstream_json, bindings)
-        else:
-            if model.api == "anthropic-messages":
-                upstream_json = anthropic_response_to_chat(upstream_json)
-            sse = chat_response_to_sse(upstream_json, bindings)
+        capture_id = self.deepseek_diagnostics.record_upstream(
+            model_id=model.gateway_id,
+            provider_id=model.provider_id,
+            upstream_model_id=model.upstream_id,
+            api=model.api,
+            request=upstream_request,
+            response=upstream_json,
+            response_body=upstream.content,
+            response_headers=upstream.headers,
+            known_tool_names=frozenset(bindings.by_encoded),
+        )
+        try:
+            if model.api == "openai-responses":
+                sse = openai_response_to_sse(upstream_json, bindings, model)
+            else:
+                if model.api == "anthropic-messages":
+                    upstream_json = anthropic_response_to_chat(upstream_json)
+                sse = chat_response_to_sse(upstream_json, bindings)
+        except Exception as exc:
+            self.deepseek_diagnostics.record_adapter(capture_id, error=exc)
+            raise
+        self.deepseek_diagnostics.record_adapter(capture_id, sse=sse)
         return BufferedResponse(
             status=200,
             headers={
