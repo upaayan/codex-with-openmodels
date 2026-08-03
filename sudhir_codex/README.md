@@ -187,8 +187,12 @@ actually support ordinary OpenAI-style function calls for its model to drive a
 tool loop.
 
 Hosted ChatGPT web search remains available to GPT models. Pi models do not
-receive the provider-hosted web-search tool; when Codex has a standalone
-`web.run` extension, that normal client-executed tool can still be used.
+receive the provider-hosted web-search tool. Instead, the gateway advertises
+standalone search support so Codex exposes the client-executed `web.run` tool.
+Only `web.run` requests are proxied through the existing ChatGPT OAuth session
+to `/alpha/search` with live web access enabled; the original Pi model ID is
+preserved, and normal prompts and tool calls continue to use the selected Pi
+provider.
 
 ## Exposing Sudhir-Codex as an MCP server
 
@@ -244,7 +248,9 @@ sudhir-codex doctor --json
 The gateway binds only to `127.0.0.1:32179`. Every route requires a random
 private client token. Redirects are disabled for credentialed upstream
 requests. ChatGPT credentials go only to the fixed ChatGPT Codex origin; each
-Pi endpoint receives only its own resolved credential.
+Pi endpoint receives only its own resolved credential. Standalone search query
+and page-operation payloads from Pi tasks go to the ChatGPT Codex search
+endpoint, but never to the Pi provider as part of that search request.
 
 The launcher keeps the gateway token in the parent Codex process for provider
 authentication but forcibly excludes it from model-invoked shell tools. New
@@ -264,7 +270,8 @@ must inspect routing metadata.
 Normal model traffic is not Codex telemetry: GPT prompts and tool schemas
 necessarily go to the ChatGPT Codex backend, Pi-model prompts and tool schemas
 go to the selected Pi endpoint, and Composer transcripts go to Cursor through
-its SDK. Those providers may have their own service-side logging policies.
+its SDK. A Pi task's standalone web searches go to the ChatGPT Codex search
+backend. Those providers may have their own service-side logging policies.
 
 ## Current adapter limits
 
@@ -273,7 +280,7 @@ its SDK. Those providers may have their own service-side logging policies.
 - The first implementation buffers each Pi completion before returning
   Responses SSE.
 - Generic provider-hosted web search and audio translation are not supported
-  for Pi models.
+  for Pi models; web search uses the standalone ChatGPT-backed `web.run` route.
 - Model-specific behavior still depends on the endpoint's actual tool,
   reasoning, image, context-window, and error compatibility.
 - Composer input is text-only in this adapter.

@@ -10,7 +10,8 @@ The fork changes the following areas:
 
 - private state and guarded launcher behavior;
 - a loopback gateway that merges configured open-model routes with Codex
-  subscription routes;
+  subscription routes and proxies standalone web search through the Codex
+  search backend;
 - provider request, reasoning, visibility, and tool-call translation;
 - an optional pinned Cursor SDK worker;
 - model and reasoning selection behavior in the terminal UI and app server;

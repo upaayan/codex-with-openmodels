@@ -45,6 +45,7 @@ XAI_DECRYPT_ERROR = (
 CASE_IMPLEMENTATIONS = {
     "private-state-isolation": ["github-linux", "github-windows"],
     "gateway-auth-loopback": ["github-linux", "github-windows"],
+    "standalone-web-search": ["github-linux", "github-windows"],
     "gateway-token-exclusion": ["staged-macos"],
     "arg0-identity": ["staged-macos"],
     "merged-catalog": ["github-linux", "github-windows"],
