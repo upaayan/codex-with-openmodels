@@ -58,9 +58,15 @@ fn communication_from_tool_message(
     author: AgentPath,
     recipient: AgentPath,
     message: String,
+    turn: &crate::session::turn_context::TurnContext,
     source: &crate::tools::context::ToolCallSource,
     trigger_turn: bool,
 ) -> InterAgentCommunication {
+    let uses_sudhir_agents =
+        turn.config.multi_agent_v2.tool_namespace.as_deref() == Some("sudhir_agents");
+    if uses_sudhir_agents || turn.model_info.slug.starts_with("pi-") {
+        return InterAgentCommunication::new(author, recipient, Vec::new(), message, trigger_turn);
+    }
     if !matches!(
         source,
         crate::tools::context::ToolCallSource::DirectPlaintextMessage

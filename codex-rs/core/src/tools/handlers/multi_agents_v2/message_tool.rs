@@ -97,6 +97,7 @@ pub(crate) async fn handle_message_string_tool(
         author,
         receiver_agent_path.clone(),
         message,
+        turn.as_ref(),
         &source,
         mode.trigger_turn(),
     );

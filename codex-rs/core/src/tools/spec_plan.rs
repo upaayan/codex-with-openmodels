@@ -362,9 +362,11 @@ fn hosted_model_tool_specs(
     let mut specs = Vec::new();
     let standalone_web_search_available = standalone_web_search_enabled(turn_context)
         && registered_extension_tool_names.contains(&ToolName::namespaced("web", "run"));
+    let sudhir_pi_model = turn_context.model_info.slug.starts_with("pi-");
     // `Some(Cached/Live/Disabled)` are the options for mode when standalone search is unavailable
     // and the provider supports hosted search. `None` prevents emitting a hosted search tool.
     let web_search_mode = (!standalone_web_search_available
+        && !sudhir_pi_model
         && turn_context.provider.capabilities().web_search)
         .then_some(turn_context.config.web_search_mode.value());
     let web_search_config = web_search_mode
