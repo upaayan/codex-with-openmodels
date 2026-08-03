@@ -772,8 +772,11 @@ pub(crate) enum AppEvent {
     StopCommitAnimation,
     CommitTick,
 
-    /// Update the current reasoning effort in the running app and widget.
+    /// Update the default reasoning effort in the running app and active widget.
     UpdateReasoningEffort(Option<ReasoningEffort>),
+
+    /// Update reasoning effort for the active task without changing the app default.
+    UpdateActiveReasoningEffort(Option<ReasoningEffort>),
 
     /// Update the current model slug in the running app and widget.
     UpdateModel(String),
@@ -805,17 +808,6 @@ pub(crate) enum AppEvent {
     /// Open the reasoning selection popup after picking a model.
     OpenReasoningPopup {
         model: ModelPreset,
-    },
-
-    /// Open the explicit Max/Ultra reasoning selection popup for a model.
-    OpenAdvancedReasoningPopup {
-        model: ModelPreset,
-    },
-
-    /// Apply an advanced reasoning effort to the active conversation without changing defaults.
-    ApplyAdvancedReasoning {
-        model: String,
-        effort: ReasoningEffort,
     },
 
     /// Open the Plan-mode reasoning scope prompt for the selected model/effort.
@@ -937,8 +929,11 @@ pub(crate) enum AppEvent {
     /// Update whether the rate limit switch prompt has been acknowledged for the session.
     UpdateRateLimitSwitchPromptHidden(bool),
 
-    /// Update the Plan-mode-specific reasoning effort in memory.
+    /// Update the default Plan-mode-specific reasoning effort in memory.
     UpdatePlanModeReasoningEffort(Option<ReasoningEffort>),
+
+    /// Update Plan-mode reasoning for the active task without changing the app default.
+    UpdateActivePlanModeReasoningEffort(Option<ReasoningEffort>),
 
     /// Persist the acknowledgement flag for the world-writable directories warning.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
