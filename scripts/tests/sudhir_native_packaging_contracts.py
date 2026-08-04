@@ -33,6 +33,23 @@ def _job_block(text: str, job: str) -> str:
 
 
 class NativePackagingContracts(unittest.TestCase):
+    def test_opencode_replay_does_not_use_deepseek_root_oneof_fixture(self) -> None:
+        factory = getattr(staged_artifact_acceptance, "_tool_replay_specs", None)
+        self.assertIsNotNone(
+            factory,
+            "the acceptance harness must define provider-specific tool replay specs",
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            specs = factory(Path(temp))
+
+        by_model = {spec["model"]: spec for spec in specs}
+        direct = by_model[staged_artifact_acceptance.DIRECT_DEEPSEEK]
+        opencode = by_model[staged_artifact_acceptance.OPENCODE_DEEPSEEK]
+        self.assertEqual(direct["tool_kind"], "root-oneof-mcp")
+        self.assertIsNotNone(direct["extra_config"])
+        self.assertEqual(opencode["tool_kind"], "exec_command")
+        self.assertIsNone(opencode["extra_config"])
+
     def test_bootstrap_completeness_excludes_register_native_tests(self) -> None:
         inventory = {
             "items": [

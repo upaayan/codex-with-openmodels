@@ -310,6 +310,13 @@ platforms = ["linux", "windows"]
 expanded_by = ["WRAPPER-49db5d16599671c6", "WRAPPER-b470154ca53f6618"]
 
 [[contract.supporting_tests]]
+register_id = "REGTEST-opencode-replay-fixture"
+file = "scripts/tests/sudhir_native_packaging_contracts.py"
+test_name = "NativePackagingContracts.test_opencode_replay_does_not_use_deepseek_root_oneof_fixture"
+runner = "python-unittest"
+platforms = ["linux", "windows"]
+
+[[contract.supporting_tests]]
 inventory_id = "TEST-7a55060a4cf001e3"
 file = "sudhir_codex/tests/test_adapter.py"
 test_name = "test_adapter.AdapterTests.test_replays_reasoning_item_as_reasoning_content_for_deepseek_routes"

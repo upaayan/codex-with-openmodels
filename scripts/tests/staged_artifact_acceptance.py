@@ -707,42 +707,88 @@ def _live_agent_case(
     }
 
 
+def _tool_replay_specs(state: Path) -> tuple[dict[str, Any], ...]:
+    direct_nonce = "SUDHIR_DEEPSEEK_TOOL_1_A91C"
+    direct_call_log = state / "mcp-call-1.jsonl"
+    opencode_nonce = "SUDHIR_OPENCODE_EXEC_2_A91C"
+    return (
+        {
+            "model": DIRECT_DEEPSEEK,
+            "nonce": direct_nonce,
+            "tool_kind": "root-oneof-mcp",
+            "call_log": direct_call_log,
+            "prompt": (
+                "Call mcp__sudhir_acceptance__echo exactly once with the string value "
+                f"{direct_nonce}. After receiving the tool output, return exactly "
+                f"{direct_nonce}."
+            ),
+            "extra_config": _mcp_config(direct_call_log, direct_nonce),
+        },
+        {
+            "model": OPENCODE_DEEPSEEK,
+            "nonce": opencode_nonce,
+            "tool_kind": "exec_command",
+            "call_log": None,
+            "prompt": (
+                "Use exec_command exactly once with cmd `printf "
+                f"{opencode_nonce}`. After receiving the command output, return exactly "
+                f"{opencode_nonce}."
+            ),
+            "extra_config": None,
+        },
+    )
+
+
 def _live_tool_replay_case(
     binary: Path, state_source: Path, gateway_url: str, token: str
 ) -> dict[str, Any]:
     outcomes = []
     with CaptureProxy(gateway_url) as proxy, TemporaryState(state_source) as state:
         forced, launcher_hash = _forced_config(proxy.url)
-        for index, model in enumerate((DIRECT_DEEPSEEK, OPENCODE_DEEPSEEK), start=1):
-            nonce = f"SUDHIR_DEEPSEEK_TOOL_{index}_A91C"
-            call_log = state / f"mcp-call-{index}.jsonl"
-            prompt = (
-                "Call mcp__sudhir_acceptance__echo exactly once with the string value "
-                f"{nonce}. After receiving the tool output, return exactly {nonce}."
-            )
+        for spec in _tool_replay_specs(state):
+            model = spec["model"]
+            nonce = spec["nonce"]
             result = _run_codex(
                 binary,
                 forced,
                 state,
                 token,
                 model,
-                prompt,
+                spec["prompt"],
                 ephemeral=True,
-                extra_config=_mcp_config(call_log, nonce),
+                extra_config=spec["extra_config"],
             )
             summary = _require_success(result, nonce)
-            calls = (
-                [
-                    json.loads(line)
-                    for line in call_log.read_text(encoding="utf-8").splitlines()
-                ]
-                if call_log.is_file()
-                else []
-            )
-            if len(calls) != 1 or calls[0] != {"called": True, "nonce_matched": True}:
-                raise AcceptanceError(
-                    f"{model} did not call the root-oneOf MCP tool exactly once"
+            if spec["tool_kind"] == "root-oneof-mcp":
+                call_log = spec["call_log"]
+                calls = (
+                    [
+                        json.loads(line)
+                        for line in call_log.read_text(encoding="utf-8").splitlines()
+                    ]
+                    if call_log.is_file()
+                    else []
                 )
+                if len(calls) != 1 or calls[0] != {
+                    "called": True,
+                    "nonce_matched": True,
+                }:
+                    raise AcceptanceError(
+                        f"{model} did not call the root-oneOf MCP tool exactly once"
+                    )
+            else:
+                command_outputs = [
+                    str(item.get("aggregated_output", "")).strip()
+                    for event in _event_documents(result.stdout)
+                    for item in [event.get("item")]
+                    if event.get("type") == "item.completed"
+                    and isinstance(item, dict)
+                    and item.get("type") == "command_execution"
+                ]
+                if len(command_outputs) != 1 or nonce not in command_outputs[0]:
+                    raise AcceptanceError(
+                        f"{model} did not call exec_command exactly once and receive its output"
+                    )
             model_requests = [
                 request
                 for request in proxy.state.requests
@@ -760,6 +806,7 @@ def _live_tool_replay_case(
             outcomes.append(
                 {
                     "model": model,
+                    "tool_kind": spec["tool_kind"],
                     "request_count": len(model_requests),
                     "event_types": summary["event_types"],
                 }
