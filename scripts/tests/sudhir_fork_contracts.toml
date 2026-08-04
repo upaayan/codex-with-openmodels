@@ -596,6 +596,14 @@ runner = "python-unittest"
 platforms = ["linux", "windows"]
 expanded_by = ["WRAPPER-49db5d16599671c6", "WRAPPER-b470154ca53f6618"]
 
+[[contract.supporting_tests]]
+register_id = "REGTEST-xai2-oauth-delegation"
+file = "sudhir_codex/tests/test_xai2_oauth.py"
+test_name = "test_xai2_oauth.Xai2OAuthTests.test_delegates_to_pi_without_xai_hardcoding"
+runner = "python-unittest"
+platforms = ["linux"]
+
+
 [[contract]]
 id = "SC-OAUTH-WORKER-001"
 behavior = "The pinned Node worker resolves an arbitrary OAuth provider through its ordinary Pi extension"
