@@ -30,8 +30,11 @@ GATEWAY_TESTS = (
     "test_openai_responses.OpenAIResponsesTests.test_translates_codex_tools_and_preserves_responses_history",
     "test_openai_responses.OpenAIResponsesTests.test_decodes_custom_and_namespaced_tool_calls_for_codex",
     "test_openai_responses.OpenAIResponsesTests.test_exposes_tools_returned_by_codex_tool_search",
+    "test_openai_responses.OpenAIResponsesTests.test_deepseek_adds_object_type_to_root_one_of_tool_schema",
     "test_openai_responses.OpenAIResponsesTests.test_history_only_exec_command_is_serializable_but_not_callable",
     "test_openai_responses.OpenAIResponsesTests.test_historical_discovered_tools_require_active_tool_search",
+    "test_credentials.CredentialTests.test_arbitrary_oauth_provider_delegates_to_pi_without_allowlist",
+    "test_app.GatewayAppTests.test_xai_grok45_uses_responses_transport",
 )
 RUST_TESTS = (
     "pre_sampling_compact_uses_selected_model_on_switch_to_smaller_context_model",

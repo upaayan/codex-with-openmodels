@@ -736,7 +736,6 @@ class AdapterTests(unittest.TestCase):
             {"reasoning_tokens": 13},
         )
 
-
     def test_preserves_tool_history_for_next_chat_turn(self) -> None:
         request = self.request()
         request["input"] = [

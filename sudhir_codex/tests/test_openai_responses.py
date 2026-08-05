@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from helpers import make_repo
@@ -157,14 +158,14 @@ class OpenAIResponsesTests(unittest.TestCase):
         self.assertEqual(upstream["tool_choice"], "auto")
         self.assertEqual(upstream["parallel_tool_calls"], True)
         self.assertEqual(upstream["input"][0]["role"], "system")
-        self.assertEqual(
-            upstream["input"][2]["encrypted_content"],
-            "opaque-previous-reasoning",
+        self.assertFalse(
+            any(item.get("type") == "reasoning" for item in upstream["input"]),
+            "untagged reasoning may belong to another provider",
         )
-        self.assertEqual(upstream["input"][3]["name"], names["shell_command"])
-        self.assertEqual(upstream["input"][3]["id"], "fc_previous")
+        self.assertEqual(upstream["input"][2]["name"], names["shell_command"])
+        self.assertEqual(upstream["input"][2]["id"], "fc_previous")
         self.assertEqual(
-            upstream["input"][4],
+            upstream["input"][3],
             {
                 "type": "function_call_output",
                 "call_id": "call-previous",
@@ -214,14 +215,14 @@ class OpenAIResponsesTests(unittest.TestCase):
             },
         }
 
-        events = response_events(openai_response_to_sse(response, bindings))
+        events = response_events(openai_response_to_sse(response, bindings, self.model))
         items = [
             event["item"]
             for event in events
             if event["type"] == "response.output_item.done"
         ]
 
-        self.assertEqual(items[0]["encrypted_content"], "opaque-new-reasoning")
+        self.assertNotEqual(items[0]["encrypted_content"], "opaque-new-reasoning")
         self.assertEqual(items[1]["type"], "custom_tool_call")
         self.assertEqual(items[1]["id"], "fc_patch")
         self.assertEqual(items[1]["name"], "apply_patch")
@@ -233,6 +234,42 @@ class OpenAIResponsesTests(unittest.TestCase):
         self.assertEqual(
             events[-1]["response"]["output"],
             items,
+        )
+
+        replay_request = {
+            "model": self.model.gateway_id,
+            "input": [
+                items[0],
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Continue"}],
+                },
+            ],
+        }
+        replay, _replay_bindings = responses_to_openai_request(
+            replay_request,
+            self.model,
+        )
+        replayed_reasoning = next(
+            item for item in replay["input"] if item.get("type") == "reasoning"
+        )
+        self.assertEqual(
+            replayed_reasoning["encrypted_content"],
+            "opaque-new-reasoning",
+        )
+
+        other_provider = replace(
+            self.model,
+            gateway_id="pi-xai2/grok-4.5",
+            provider_id="xai2",
+        )
+        foreign_replay, _foreign_bindings = responses_to_openai_request(
+            replay_request,
+            other_provider,
+        )
+        self.assertFalse(
+            any(item.get("type") == "reasoning" for item in foreign_replay["input"])
         )
 
     def test_exposes_tools_returned_by_codex_tool_search(self) -> None:
@@ -290,6 +327,110 @@ class OpenAIResponsesTests(unittest.TestCase):
             ],
         )
         self.assertIsInstance(upstream["input"][-1]["output"], str)
+
+    def test_deepseek_adds_object_type_to_root_one_of_tool_schema(self) -> None:
+        request = {
+            "model": "pi-deepseek/deepseek-v4-flash",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Search tools"}],
+                },
+                {
+                    "type": "tool_search_call",
+                    "id": "fc_search",
+                    "call_id": "call-search",
+                    "status": "completed",
+                    "execution": "client",
+                    "arguments": {"query": "automations"},
+                },
+                {
+                    "type": "tool_search_output",
+                    "call_id": "call-search",
+                    "status": "completed",
+                    "execution": "client",
+                    "tools": [
+                        {
+                            "type": "namespace",
+                            "name": "codex_app",
+                            "description": "Codex app tools",
+                            "tools": [
+                                {
+                                    "type": "function",
+                                    "name": "automation_update",
+                                    "description": "Manage automations",
+                                    "parameters": {
+                                        "$defs": {
+                                            "create": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "mode": {"const": "create"}
+                                                },
+                                                "required": ["mode"],
+                                            },
+                                            "delete": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "mode": {"const": "delete"}
+                                                },
+                                                "required": ["mode"],
+                                            },
+                                        },
+                                        "oneOf": [
+                                            {"$ref": "#/$defs/create"},
+                                            {"$ref": "#/$defs/delete"},
+                                        ],
+                                    },
+                                }
+                            ],
+                        }
+                    ],
+                },
+            ],
+            "tools": [
+                {
+                    "type": "tool_search",
+                    "description": "Search deferred tools",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                    },
+                }
+            ],
+        }
+        original_parameters = request["input"][2]["tools"][0]["tools"][0][
+            "parameters"
+        ]
+        deepseek_model = replace(
+            self.model,
+            gateway_id="pi-deepseek/deepseek-v4-flash",
+            provider_id="deepseek",
+            upstream_id="deepseek-v4-flash",
+        )
+
+        deepseek_upstream, _deepseek_bindings = responses_to_openai_request(
+            request,
+            deepseek_model,
+        )
+        xai_upstream, _xai_bindings = responses_to_openai_request(request, self.model)
+        deepseek_tool = next(
+            tool
+            for tool in deepseek_upstream["tools"]
+            if tool["name"] == "codex_app__automation_update"
+        )
+        xai_tool = next(
+            tool
+            for tool in xai_upstream["tools"]
+            if tool["name"] == "codex_app__automation_update"
+        )
+
+        self.assertEqual(
+            deepseek_tool["parameters"],
+            {"type": "object", **original_parameters},
+        )
+        self.assertEqual(xai_tool["parameters"], original_parameters)
+        self.assertNotIn("type", original_parameters)
 
     def test_history_only_exec_command_is_serializable_but_not_callable(
         self,
@@ -351,6 +492,7 @@ class OpenAIResponsesTests(unittest.TestCase):
                     ],
                 },
                 bindings,
+                self.model,
             )
 
     def test_historical_discovered_tools_require_active_tool_search(self) -> None:
