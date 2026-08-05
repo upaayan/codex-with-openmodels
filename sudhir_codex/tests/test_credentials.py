@@ -1,11 +1,8 @@
-import json
 import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-
-import httpx
 
 from helpers import basic_pi_document
 from helpers import make_repo
@@ -36,22 +33,6 @@ class CredentialTests(unittest.TestCase):
             .models[0]
         )
 
-    def xai_model(self):
-        return self.model(
-            {
-                "providers": {
-                    "xai": {
-                        "models": [
-                            {
-                                "id": "grok-4.5",
-                                "reasoning": True,
-                            }
-                        ]
-                    }
-                }
-            }
-        )
-
     def test_auth_file_api_key_is_used(self) -> None:
         write_json(
             self.pi_dir / "auth.json",
@@ -64,99 +45,73 @@ class CredentialTests(unittest.TestCase):
 
         self.assertEqual(headers, {"Authorization": "Bearer pi-secret"})
 
-    def test_current_xai_oauth_access_token_is_used(self) -> None:
+    def test_arbitrary_oauth_provider_delegates_to_pi_without_allowlist(
+        self,
+    ) -> None:
+        try:
+            from sudhir_codex_gateway.pi_auth_worker import PiAuthResult
+        except ImportError as exc:
+            self.fail(f"generic Pi auth worker is missing: {exc}")
+
+        model = self.model(
+            {
+                "providers": {
+                    "future-oauth": {
+                        "baseUrl": "https://configured.example/v1",
+                        "api": "openai-responses",
+                        "models": [{"id": "future-model", "reasoning": True}],
+                    }
+                }
+            }
+        )
         write_json(
             self.pi_dir / "auth.json",
             {
-                "xai": {
+                "future-oauth": {
                     "type": "oauth",
-                    "access": "xai-access",
-                    "refresh": "xai-refresh",
-                    "expires": 9_999_999_999_999,
+                    "access": "stored-only-for-pi",
                 }
             },
         )
 
-        with patch("httpx.post") as post:
-            try:
-                headers = CredentialResolver(
-                    self.pi_dir / "auth.json"
-                ).authorization_headers(self.xai_model())
-            except GatewayError as exc:
-                self.fail(f"xAI OAuth access token was rejected: {exc}")
+        class FakePiAuthWorker:
+            def __init__(self) -> None:
+                self.models = []
 
-        self.assertEqual(headers, {"Authorization": "Bearer xai-access"})
-        post.assert_not_called()
-
-    def test_expired_xai_oauth_token_is_refreshed_and_saved_atomically(self) -> None:
-        auth_path = self.pi_dir / "auth.json"
-        write_json(
-            auth_path,
-            {
-                "xai": {
-                    "type": "oauth",
-                    "access": "expired-access",
-                    "refresh": "existing-refresh",
-                    "expires": 1,
-                },
-                "other": {"type": "api_key", "key": "other-secret"},
-            },
-        )
-        refresh_response = httpx.Response(
-            200,
-            json={
-                "access_token": "fresh-access",
-                "expires_in": 7200,
-            },
-        )
-        real_replace = os.replace
-
-        with (
-            patch(
-                "time.time",
-                return_value=2_000_000_000,
-            ),
-            patch(
-                "httpx.post",
-                return_value=refresh_response,
-            ) as post,
-            patch(
-                "sudhir_codex_gateway.credentials.os.replace",
-                wraps=real_replace,
-            ) as replace,
-        ):
-            try:
-                headers = CredentialResolver(auth_path).authorization_headers(
-                    self.xai_model()
+            def resolve(self, selected_model):
+                self.models.append(selected_model)
+                return PiAuthResult(
+                    provider_id="future-oauth",
+                    model_id="future-model",
+                    api="openai-responses",
+                    api_key="pi-derived-access",
+                    headers={"X-Provider-Auth": "extension-value"},
+                    base_url="https://auth-selected.example/v1",
                 )
-            except GatewayError as exc:
-                self.fail(f"xAI OAuth refresh was rejected: {exc}")
 
-        self.assertEqual(headers, {"Authorization": "Bearer fresh-access"})
+            def close(self) -> None:
+                return None
+
+        worker = FakePiAuthWorker()
+        try:
+            resolver = CredentialResolver(
+                self.pi_dir / "auth.json",
+                oauth_worker=worker,
+            )
+        except TypeError as exc:
+            self.fail(f"CredentialResolver cannot delegate OAuth generically: {exc}")
+
+        resolved = resolver.resolve(model)
+
+        self.assertEqual(worker.models, [model])
         self.assertEqual(
-            json.loads(auth_path.read_text(encoding="utf-8")),
+            resolved.headers,
             {
-                "xai": {
-                    "type": "oauth",
-                    "access": "fresh-access",
-                    "refresh": "existing-refresh",
-                    "expires": 2_000_006_900_000,
-                },
-                "other": {"type": "api_key", "key": "other-secret"},
+                "Authorization": "Bearer pi-derived-access",
+                "X-Provider-Auth": "extension-value",
             },
         )
-        replace.assert_called_once()
-        if os.name != "nt":
-            self.assertEqual(auth_path.stat().st_mode & 0o777, 0o600)
-        post.assert_called_once()
-        self.assertEqual(
-            post.call_args.kwargs["data"],
-            {
-                "grant_type": "refresh_token",
-                "client_id": "b1a00492-073a-47ea-816f-4c329264a828",
-                "refresh_token": "existing-refresh",
-            },
-        )
+        self.assertEqual(resolved.base_url, "https://auth-selected.example/v1")
 
     def test_anthropic_route_uses_messages_headers(self) -> None:
         document = basic_pi_document()
@@ -279,9 +234,9 @@ class CredentialTests(unittest.TestCase):
             run_command.return_value.stdout = ""
 
             with self.assertRaisesRegex(GatewayError, "failed for Pi provider"):
-                CredentialResolver(
-                    self.pi_dir / "auth.json"
-                ).authorization_headers(self.model(document))
+                CredentialResolver(self.pi_dir / "auth.json").authorization_headers(
+                    self.model(document)
+                )
 
     def test_loopback_endpoint_may_omit_auth(self) -> None:
         model = self.model(basic_pi_document("http://127.0.0.1:18081/v1"))
@@ -296,10 +251,10 @@ class CredentialTests(unittest.TestCase):
                 self.model()
             )
 
-    def test_non_api_key_auth_is_rejected(self) -> None:
+    def test_unknown_auth_type_is_rejected(self) -> None:
         write_json(
             self.pi_dir / "auth.json",
-            {"demo": {"type": "oauth", "access": "not-supported"}},
+            {"demo": {"type": "unknown", "access": "not-supported"}},
         )
         with self.assertRaisesRegex(GatewayError, "unsupported auth type"):
             CredentialResolver(self.pi_dir / "auth.json").authorization_headers(

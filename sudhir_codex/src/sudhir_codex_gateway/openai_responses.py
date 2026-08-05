@@ -1,6 +1,7 @@
 """Translate Codex Responses requests to a provider's OpenAI Responses API."""
 
 import copy
+import hashlib
 import json
 from typing import Any
 
@@ -9,6 +10,8 @@ from .adapter import ToolBindings
 from .catalog import OpenModel
 from .errors import GatewayError
 from .reasoning import reasoning_request_options
+
+ENCRYPTED_ROUTE_PREFIX = "sudhir-codex-route-v1."
 
 
 def responses_to_openai_request(
@@ -46,7 +49,7 @@ def responses_to_openai_request(
     effort = reasoning_options.get("reasoning_effort")
     if isinstance(effort, str) and effort:
         upstream["reasoning"] = {"effort": effort, "summary": "auto"}
-    tools = [_responses_tool(binding) for binding in bindings.bindings]
+    tools = [_responses_tool(binding, model) for binding in bindings.bindings]
     if tools:
         upstream["tools"] = tools
         tool_choice = request.get("tool_choice", "auto")
@@ -63,6 +66,7 @@ def responses_to_openai_request(
 def openai_response_to_sse(
     response: object,
     bindings: ToolBindings,
+    model: OpenModel,
 ) -> bytes:
     """Convert one non-streaming Responses result to Responses SSE."""
 
@@ -92,7 +96,7 @@ def openai_response_to_sse(
         translated
         for item in output
         if isinstance(item, dict)
-        for translated in [_translate_output_item(item, bindings)]
+        for translated in [_translate_output_item(item, bindings, model)]
         if translated is not None
     ]
     for item in translated_output:
@@ -144,23 +148,30 @@ def _translate_input(
                     {"role": "user", "content": f"[Message from {author}]\n{text}"}
                 )
         elif kind == "reasoning":
-            encrypted = item.get("encrypted_content")
-            if isinstance(encrypted, str) and encrypted:
-                translated.append(
-                    _copy_fields(
-                        item,
-                        "type",
-                        "id",
-                        "status",
-                        "summary",
-                        "content",
-                        "encrypted_content",
-                    )
+            encrypted = _unwrap_encrypted_content(
+                item.get("encrypted_content"),
+                model,
+            )
+            if encrypted is not None:
+                reasoning = _copy_fields(
+                    item,
+                    "type",
+                    "id",
+                    "status",
+                    "summary",
+                    "content",
                 )
+                reasoning["encrypted_content"] = encrypted
+                translated.append(reasoning)
         elif kind == "compaction":
-            encrypted = item.get("encrypted_content")
-            if isinstance(encrypted, str) and encrypted:
-                translated.append(_copy_fields(item, "type", "id", "encrypted_content"))
+            encrypted = _unwrap_encrypted_content(
+                item.get("encrypted_content"),
+                model,
+            )
+            if encrypted is not None:
+                compaction = _copy_fields(item, "type", "id")
+                compaction["encrypted_content"] = encrypted
+                translated.append(compaction)
         elif kind in {"function_call", "custom_tool_call", "tool_search_call"}:
             translated.append(_translate_tool_call(item, bindings))
         elif kind in {
@@ -215,8 +226,7 @@ def _active_tools(
         raise GatewayError(400, "invalid_tools", "Responses tools must be a list")
     available = list(tools)
     tool_search_active = any(
-        isinstance(tool, dict) and tool.get("type") == "tool_search"
-        for tool in tools
+        isinstance(tool, dict) and tool.get("type") == "tool_search" for tool in tools
     )
     if not tool_search_active:
         return available
@@ -340,13 +350,20 @@ def _translate_tool_call(
     return translated
 
 
-def _responses_tool(binding: ToolBinding) -> dict[str, Any]:
+def _responses_tool(binding: ToolBinding, model: OpenModel) -> dict[str, Any]:
     definition = binding.as_chat_tool()["function"]
+    parameters = copy.deepcopy(definition["parameters"])
+    if (
+        model.provider_id == "deepseek"
+        and "type" not in parameters
+        and isinstance(parameters.get("oneOf"), list)
+    ):
+        parameters["type"] = "object"
     return {
         "type": "function",
         "name": definition["name"],
         "description": definition["description"],
-        "parameters": definition["parameters"],
+        "parameters": parameters,
         "strict": False,
     }
 
@@ -354,9 +371,17 @@ def _responses_tool(binding: ToolBinding) -> dict[str, Any]:
 def _translate_output_item(
     item: dict[str, Any],
     bindings: ToolBindings,
+    model: OpenModel,
 ) -> dict[str, Any] | None:
     if item.get("type") in {"reasoning", "message", "compaction"}:
-        return copy.deepcopy(item)
+        translated = copy.deepcopy(item)
+        encrypted = translated.get("encrypted_content")
+        if isinstance(encrypted, str) and encrypted:
+            translated["encrypted_content"] = _wrap_encrypted_content(
+                encrypted,
+                model,
+            )
+        return translated
     if item.get("type") != "function_call":
         return None
 
@@ -433,6 +458,37 @@ def _copy_fields(source: dict[str, Any], *names: str) -> dict[str, Any]:
         for name in names
         if source.get(name) is not None
     }
+
+
+def _wrap_encrypted_content(encrypted: str, model: OpenModel) -> str:
+    return f"{ENCRYPTED_ROUTE_PREFIX}{_route_tag(model)}.{encrypted}"
+
+
+def _unwrap_encrypted_content(
+    encrypted: object,
+    model: OpenModel,
+) -> str | None:
+    if not isinstance(encrypted, str) or not encrypted.startswith(
+        ENCRYPTED_ROUTE_PREFIX
+    ):
+        return None
+    tagged = encrypted.removeprefix(ENCRYPTED_ROUTE_PREFIX)
+    tag, separator, payload = tagged.partition(".")
+    if separator and tag == _route_tag(model) and payload:
+        return payload
+    return None
+
+
+def _route_tag(model: OpenModel) -> str:
+    identity = "\0".join(
+        (
+            model.provider_id,
+            model.upstream_id,
+            model.api,
+            model.base_url,
+        )
+    )
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
 
 
 def _encode_sse(events: list[dict[str, Any]]) -> bytes:

@@ -18,6 +18,7 @@ from sudhir_codex_gateway.app import GatewaySettings
 from sudhir_codex_gateway.app import StreamingResponse
 from sudhir_codex_gateway.cursor_worker import CursorTurnResult
 from sudhir_codex_gateway.errors import GatewayError
+from sudhir_codex_gateway.pi_auth_worker import PiAuthResult
 
 
 class GatewayAppTests(unittest.TestCase):
@@ -442,9 +443,24 @@ class GatewayAppTests(unittest.TestCase):
                 },
             )
 
+        class XaiAuthWorker:
+            def resolve(self, _model):
+                return PiAuthResult(
+                    provider_id="xai",
+                    model_id="grok-4.5",
+                    api="openai-responses",
+                    api_key="xai-secret",
+                    headers={},
+                    base_url=None,
+                )
+
+            def close(self) -> None:
+                return None
+
         app = GatewayApp(
             self.settings,
             http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+            pi_auth_worker=XaiAuthWorker(),
         )
         try:
             response = app.responses(

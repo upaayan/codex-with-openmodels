@@ -11,8 +11,9 @@ The fork changes the following areas:
 - private state and guarded launcher behavior;
 - a loopback gateway that merges configured open-model routes with Codex
   subscription routes;
-- provider request, reasoning, visibility, and tool-call translation;
-- an optional pinned Cursor SDK worker;
+- provider request, route-scoped reasoning, visibility, and tool-call
+  translation;
+- pinned Cursor SDK and generic Pi OAuth workers;
 - model and reasoning selection behavior in the terminal UI and app server;
 - Windows deployment through the Linux x64 MUSL backend inside WSL2, with the
   native Tauri frontend launching it through `wsl.exe`;
