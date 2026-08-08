@@ -243,13 +243,23 @@ X-Test = "value"
             ["-c", 'model_provider="other"'],
             ['-cmodel_provider="other"'],
             ['-c=model_provider="other"'],
-            ["--config=otel.exporter=\"http\""],
+            ['--config=otel.exporter="http"'],
             ["--enable", "enable_request_compression"],
             ["--enable=enable_request_compression"],
             ["--disable=enable_request_compression"],
             ["-c", "agents.max_concurrent_threads_per_session=1"],
             ["-c", 'features.multi_agent_v2.tool_namespace="collaboration"'],
             ["-c", 'shell_environment_policy.inherit="all"'],
+            ["sandbox", "-c", 'shell_environment_policy.inherit="all"'],
+            [
+                "sandbox",
+                "-c",
+                'default_permissions="node_repl"',
+                "-c",
+                "permissions.node_repl={}",
+                "-c",
+                'shell_environment_policy.inherit="core"',
+            ],
             ["--oss"],
             ["exec", "--oss", "prompt"],
             ["--local-provider", "ollama"],
@@ -262,6 +272,34 @@ X-Test = "value"
 
         _reject_critical_overrides(["-c", 'model="pi-demo/demo/model"'])
         _reject_critical_overrides(['-cmodel="pi-demo/demo/model"'])
+
+    def test_launcher_allows_only_node_repl_sandbox_environment_inheritance(
+        self,
+    ) -> None:
+        invocation = [
+            "sandbox",
+            "-c",
+            'shell_environment_policy.inherit="all"',
+            "-c",
+            'default_permissions="node_repl"',
+            "-c",
+            "permissions.node_repl={ network = { enabled = false } }",
+            "--",
+            "/usr/bin/env",
+        ]
+        _reject_critical_overrides(invocation)
+
+        rejected_policy_overrides = [
+            'shell_environment_policy.set.LEAK="SUDHIR_CODEX_GATEWAY_TOKEN"',
+            'shell_environment_policy.filters.SUDHIR_CODEX_GATEWAY_TOKEN="include"',
+            "shell_environment_policy.exclude=[]",
+            'shell_environment_policy.include_only=["SUDHIR_CODEX_GATEWAY_TOKEN"]',
+            "shell_environment_policy.ignore_default_excludes=true",
+        ]
+        for override in rejected_policy_overrides:
+            with self.subTest(override=override):
+                with self.assertRaises(GatewayError):
+                    _reject_critical_overrides([*invocation[:-2], "-c", override])
 
     def test_forced_config_pins_gateway_and_telemetry_off(self) -> None:
         argv = _forced_config("http://127.0.0.1:32179")
@@ -321,9 +359,7 @@ X-Test = "value"
                     "sudhir_codex_gateway.launcher.is_windows",
                     return_value=True,
                 ),
-                mock.patch(
-                    "sudhir_codex_gateway.launcher.subprocess.run"
-                ) as run_core,
+                mock.patch("sudhir_codex_gateway.launcher.subprocess.run") as run_core,
             ):
                 run_core.return_value.returncode = 7
 
