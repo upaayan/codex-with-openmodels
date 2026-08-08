@@ -122,6 +122,7 @@ def _management_command(argv: list[str]) -> list[str] | None:
 
 
 def _reject_critical_overrides(argv: list[str]) -> None:
+    trusted_node_repl_sandbox = _is_node_repl_sandbox_invocation(argv)
     index = 0
     while index < len(argv):
         argument = argv[index]
@@ -152,6 +153,14 @@ def _reject_critical_overrides(argv: list[str]) -> None:
                 key == prefix or key.startswith(f"{prefix}.")
                 for prefix in CRITICAL_CONFIG_PREFIXES
             ):
+                if (
+                    key == "shell_environment_policy.inherit"
+                    and "=" in override
+                    and override.split("=", 1)[1].strip() == '"all"'
+                    and trusted_node_repl_sandbox
+                ):
+                    index += 1
+                    continue
                 raise GatewayError(
                     64,
                     "critical_override_rejected",
@@ -171,6 +180,42 @@ def _reject_critical_overrides(argv: list[str]) -> None:
                     "Gateway request compression must remain disabled",
                 )
         index += 1
+
+
+def _is_node_repl_sandbox_invocation(argv: list[str]) -> bool:
+    """Recognize the sandbox profile emitted by the bundled node_repl runtime.
+
+    Inheriting the parent environment is safe for this one profile because the
+    launcher still supplies its forced filter for SUDHIR_CODEX_GATEWAY_TOKEN and
+    continues to reject every caller-supplied filter/set/include/exclude policy.
+    """
+    if not argv or argv[0] != "sandbox":
+        return False
+
+    overrides: list[str] = []
+    index = 1
+    while index < len(argv):
+        argument = argv[index]
+        if argument in {"-c", "--config"}:
+            if index + 1 >= len(argv):
+                return False
+            overrides.append(argv[index + 1])
+            index += 2
+            continue
+        if argument.startswith("--config="):
+            overrides.append(argument.split("=", 1)[1])
+        elif argument.startswith("-c") and not argument.startswith("--"):
+            overrides.append(argument[2:].removeprefix("="))
+        index += 1
+
+    parsed = [
+        tuple(part.strip() for part in override.split("=", 1))
+        for override in overrides
+        if "=" in override
+    ]
+    return ("default_permissions", '"node_repl"') in parsed and any(
+        key == "permissions.node_repl" for key, _value in parsed
+    )
 
 
 def _forced_config(gateway_url: str) -> list[str]:
@@ -198,10 +243,7 @@ def _forced_config(gateway_url: str) -> list[str]:
         "agents.enabled=true",
         "agents.max_concurrent_threads_per_session=6",
         'features.multi_agent_v2.tool_namespace="sudhir_agents"',
-        (
-            "shell_environment_policy.filters."
-            'SUDHIR_CODEX_GATEWAY_TOKEN="exclude"'
-        ),
+        ('shell_environment_policy.filters.SUDHIR_CODEX_GATEWAY_TOKEN="exclude"'),
     ]
     result: list[str] = []
     for value in values:
