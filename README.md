@@ -48,8 +48,8 @@ Model licences and provider terms vary.
 - A Python gateway that combines GPT and configured non-GPT routes.
 - A guarded `sudhir-codex` launcher with state separate from official Codex.
 - A pinned Node worker for four optional Cursor Composer routes.
-- GitHub Actions definitions for native Apple Silicon macOS, Ubuntu 22.04 x64,
-  and Windows x64 release bundles.
+- GitHub Actions definitions for native Apple Silicon macOS and Linux x64 MUSL
+  backend release bundles.
 
 No ChatGPT or Codex desktop-app package, artwork, extracted asset, credential,
 API key, authentication file, or local configuration is included.
@@ -60,10 +60,11 @@ The initial release workflow builds:
 
 - Apple Silicon macOS: `aarch64-apple-darwin`
 - Ubuntu 22.04 x64: `x86_64-unknown-linux-musl`
-- Windows x64: `x86_64-pc-windows-msvc`
 
 Release archives contain native runtime binaries and one `SHA256SUMS` file.
-Windows builds are initially unsigned and may show a Windows trust warning.
+Windows runs the Linux x64 MUSL backend inside WSL2; WSL1 and a native Windows
+backend are not supported release targets. The native Windows Tauri frontend
+continues to launch the WSL2 backend through `wsl.exe`.
 
 ## Runtime isolation
 
@@ -78,10 +79,10 @@ and authentication data remain private inputs on each user-controlled machine.
 ## Setup and use
 
 See [sudhir_codex/README.md](sudhir_codex/README.md) for the Unix source and
-prebuilt installer modes, Windows prebuilt installer, model IDs, gateway
-commands, and rollback notes.
+prebuilt installer modes, WSL2 deployment, model IDs, gateway commands, and
+rollback notes.
 
-For copy-friendly native Windows commands, see
+For copy-friendly Windows/WSL2 commands, see
 [WINDOWS-QUICKSTART.md](WINDOWS-QUICKSTART.md).
 
 The launch command is deliberately named `sudhir-codex`. Installation never

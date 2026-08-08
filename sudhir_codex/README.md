@@ -14,8 +14,8 @@ routes, as one model catalog.
 - Pinned Cursor SDK worker: `<checkout>/sudhir_codex/cursor_worker`
 - Cursor worker state: `$HOME/.sudhir-codex/cursor-sdk`
 - Fork-local Rust toolchain for Unix source builds: `<checkout>/.toolchains`
-- Core executable: `<checkout>/dist/sudhir-codex-core` on Unix or
-  `<checkout>\dist\sudhir-codex-core.exe` on Windows
+- Core executable: `<checkout>/dist/sudhir-codex-core` on macOS, Linux, and
+  supported Windows deployments inside WSL2
 
 There are no symlinks to the official Codex installation. The core executable
 also refuses to run with `CODEX_HOME=~/.codex`, a relative home, an overlapping
@@ -62,20 +62,26 @@ the private Python environment, copy the launcher, initialize private state,
 copy official Codex auth only when private auth does not exist, and import only
 the official config's `[mcp_servers.*]` tables.
 
-On native Windows x64, clone the exact release tag, download the matching ZIP
-and `SHA256SUMS`, then run:
+On Windows, run the backend inside WSL2. WSL1 and a native Windows backend are
+not supported. From a WSL2 shell, clone the exact release tag at
+`$HOME/.playground/sudhir-codex`, download
+`codex-with-openmodels-x86_64-unknown-linux-musl.tar.gz` and `SHA256SUMS`, then
+use the same Unix installer:
 
-```powershell
-.\scripts\sudhir-codex.ps1 `
-  -Archive .\codex-with-openmodels-x86_64-pc-windows-msvc.zip `
-  -Checksums .\SHA256SUMS
+```bash
+cd "$HOME/.playground/sudhir-codex"
+./scripts/install-sudhir-codex \
+  --archive ./codex-with-openmodels-x86_64-unknown-linux-musl.tar.gz \
+  --checksums ./SHA256SUMS
 ```
 
-The PowerShell installer verifies the archive, installs the prebuilt binaries,
-creates the private Python environment, runs the pinned Cursor-worker install,
-initializes independent state, and writes only
-`<checkout>\bin\sudhir-codex.cmd`. Use `-ImportOfficialState` only when you
-want to copy official auth and MCP configuration into the independent state.
+The native Windows Tauri frontend launches `sudhir-codex app-server --stdio`
+through `wsl.exe`. Windows applications can reach the WSL2 gateway through
+localhost forwarding at `127.0.0.1:32179`.
+
+The retained `is_windows()`/`.exe`/ACL branches apply only to dormant native
+Windows source paths. They are unused by the supported deployment because the
+gateway executes as Linux inside WSL2.
 
 It never installs or replaces a command named `codex`.
 
@@ -213,10 +219,10 @@ MCP-created Codex tasks use the same private home, merged catalog, gateway, and
 
 ## Authentication
 
-The initial Unix install copies `$HOME/.codex/auth.json` to
-`$HOME/.sudhir-codex/auth.json` with mode `0600`. On Windows, the private files
-receive a current-user ACL. It is a copy, not a link. Thereafter the two
-installations refresh and update their own files.
+The initial install copies `$HOME/.codex/auth.json` to
+`$HOME/.sudhir-codex/auth.json` with mode `0600`, including under WSL2. It is a
+copy, not a link. Thereafter the two installations refresh and update their own
+files.
 
 To replace private auth with a fresh copy of official auth:
 

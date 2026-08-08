@@ -14,7 +14,8 @@ The fork changes the following areas:
 - provider request, reasoning, visibility, and tool-call translation;
 - an optional pinned Cursor SDK worker;
 - model and reasoning selection behavior in the terminal UI and app server;
-- native Windows gateway and launcher support;
+- Windows deployment through the Linux x64 MUSL backend inside WSL2, with the
+  native Tauri frontend launching it through `wsl.exe`;
 - public CI, native release packaging, checksums, and upstream-change
   notification.
 
