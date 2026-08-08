@@ -73,6 +73,51 @@ jobs:
             exit 1
           fi
 
+          native_windows_build_job="windows""-build"
+          native_windows_bundle_job="win""dows"
+          source_windows_job="gateway""-windows"
+          native_jobs="$(sed -n 's/^  \([A-Za-z0-9_-]*\):$/\1/p' .github/workflows/native-release.yml)"
+          source_jobs="$(sed -n 's/^  \([A-Za-z0-9_-]*\):$/\1/p' .github/workflows/source-ci.yml)"
+          for job in "$native_windows_build_job" "$native_windows_bundle_job"; do
+            if grep -Fxq "$job" <<<"$native_jobs"; then
+              echo "Sudhir native Windows release job returned: $job" >&2
+              exit 1
+            fi
+          done
+          if grep -Fxq "$source_windows_job" <<<"$source_jobs"; then
+            echo "Sudhir Windows backend CI job returned: $source_windows_job" >&2
+            exit 1
+          fi
+
+          native_windows_installer="scripts/sudhir-codex"".ps1"
+          if [ -e "$native_windows_installer" ]; then
+            echo "Native Windows backend installer returned" >&2
+            exit 1
+          fi
+          scoped_windows_policy_paths=(
+            .github/workflows/native-release.yml
+            .github/workflows/source-ci.yml
+            README.md
+            WINDOWS-QUICKSTART.md
+            MODIFICATIONS.md
+            sudhir_codex/README.md
+          )
+          forbidden_windows_tokens=(
+            "codex-with-openmodels-x86_64-pc-windows-msvc"".zip"
+            "windows-release-""binaries"
+            "windows-release-""archive"
+            "sudhir-codex-core"".exe"
+            "sudhir-codex"".cmd"
+            "scripts/sudhir-codex"".ps1"
+            "scripts\\sudhir-codex"".ps1"
+          )
+          for token in "${forbidden_windows_tokens[@]}"; do
+            if git grep -nF "$token" -- "${scoped_windows_policy_paths[@]}"; then
+              echo "Native Windows backend policy token returned" >&2
+              exit 1
+            fi
+          done
+
   gateway-linux:
     name: Gateway and Cursor worker (Ubuntu)
     runs-on: ubuntu-22.04
@@ -106,159 +151,6 @@ jobs:
           npm ci --omit=dev
           node --check worker.mjs
           npm ls --omit=dev @cursor/sdk
-
-  gateway-windows:
-    name: Gateway, installer, and Cursor worker (Windows)
-    runs-on: windows-2022
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
-        with:
-          python-version: "3.13"
-      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
-        with:
-          node-version: "22.13.1"
-          cache: npm
-          cache-dependency-path: sudhir_codex/cursor_worker/package-lock.json
-
-      - name: Install the gateway test environment
-        shell: pwsh
-        run: python -m pip install --disable-pip-version-check --editable ./sudhir_codex ruff==0.15.13
-
-      - name: Check and test the native Windows gateway
-        shell: pwsh
-        run: |
-          python -m compileall -q sudhir_codex/src sudhir_codex/tests
-          python scripts/tests/sudhir_targeted_regressions.py gateway
-          ruff check sudhir_codex/src sudhir_codex/tests
-
-      - name: Test the Windows Pi model setup script
-        shell: pwsh
-        run: .\scripts\tests\setup-pi-models.tests.ps1
-
-      - name: Test the Windows skills and AGENTS installer
-        shell: pwsh
-        run: .\scripts\tests\install-sudhir-codex-context.tests.ps1
-
-      - name: Check the pinned Windows Cursor worker
-        working-directory: sudhir_codex/cursor_worker
-        shell: pwsh
-        run: |
-          npm ci --omit=dev
-          node --check worker.mjs
-          npm ls --omit=dev @cursor/sdk @cursor/sdk-win32-x64
-
-          $WorkerSmokeRoot = Join-Path $env:RUNNER_TEMP "cursor-worker-startup"
-          $WorkerState = Join-Path $WorkerSmokeRoot "state"
-          $WorkerAuth = Join-Path $WorkerSmokeRoot "auth.json"
-          $EmptyInput = Join-Path $WorkerSmokeRoot "stdin.txt"
-          $WorkerStdout = Join-Path $WorkerSmokeRoot "stdout.log"
-          $WorkerStderr = Join-Path $WorkerSmokeRoot "stderr.log"
-          New-Item -ItemType Directory -Path $WorkerState -Force | Out-Null
-          Set-Content -LiteralPath $WorkerAuth -Value "{}" -NoNewline
-          New-Item -ItemType File -Path $EmptyInput -Force | Out-Null
-
-          $env:SUDHIR_CURSOR_AUTH_PATH = $WorkerAuth
-          $env:SUDHIR_CURSOR_STATE_DIR = $WorkerState
-          $Worker = Start-Process `
-            -FilePath (Get-Command node).Source `
-            -ArgumentList "worker.mjs" `
-            -NoNewWindow `
-            -PassThru `
-            -RedirectStandardInput $EmptyInput `
-            -RedirectStandardOutput $WorkerStdout `
-            -RedirectStandardError $WorkerStderr
-          if (-not $Worker.WaitForExit(10000)) {
-            Stop-Process -Id $Worker.Id -Force
-            throw "Cursor worker did not exit after closed stdin"
-          }
-          if ($Worker.ExitCode -ne 0) {
-            Get-Content -LiteralPath $WorkerStderr
-            throw "Cursor worker startup failed with exit code $($Worker.ExitCode)"
-          }
-
-      - name: Smoke-test Windows installation and gateway lifecycle
-        shell: pwsh
-        run: |
-          $SmokeRoot = Join-Path $env:RUNNER_TEMP "openmodels-installer-smoke"
-          $ArchiveRoot = Join-Path $SmokeRoot "archive"
-          $InstallRoot = Join-Path $SmokeRoot "checkout"
-          $State = Join-Path $SmokeRoot "state"
-          $PiAgentDir = Join-Path $SmokeRoot "pi-agent"
-          New-Item -ItemType Directory -Path $ArchiveRoot, $InstallRoot -Force | Out-Null
-          $Binaries = @(
-            "codex.exe",
-            "codex-app-server.exe",
-            "codex-code-mode-host.exe",
-            "codex-command-runner.exe",
-            "codex-responses-api-proxy.exe",
-            "codex-windows-sandbox-setup.exe"
-          )
-          foreach ($Binary in $Binaries) {
-            Set-Content -LiteralPath (Join-Path $ArchiveRoot $Binary) -Value "smoke" -Encoding Ascii
-          }
-          $Archive = Join-Path $env:RUNNER_TEMP "codex-with-openmodels-x86_64-pc-windows-msvc.zip"
-          Compress-Archive -Path (Join-Path $ArchiveRoot "*.exe") -DestinationPath $Archive
-          $Checksums = Join-Path $env:RUNNER_TEMP "SHA256SUMS"
-          $Hash = (Get-FileHash -LiteralPath $Archive -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$Hash  $([System.IO.Path]::GetFileName($Archive))" |
-            Set-Content -LiteralPath $Checksums -Encoding Ascii
-
-          New-Item -ItemType Directory -Path `
-            (Join-Path $InstallRoot "codex-rs"), `
-            (Join-Path $InstallRoot "sudhir_codex\cursor_worker") `
-            -Force | Out-Null
-          Copy-Item -LiteralPath .\sudhir_codex\pyproject.toml `
-            -Destination (Join-Path $InstallRoot "sudhir_codex\pyproject.toml")
-          Copy-Item -LiteralPath .\sudhir_codex\src `
-            -Destination (Join-Path $InstallRoot "sudhir_codex\src") `
-            -Recurse
-          Copy-Item -Path .\sudhir_codex\cursor_worker\package*.json `
-            -Destination (Join-Path $InstallRoot "sudhir_codex\cursor_worker")
-          Copy-Item -LiteralPath .\sudhir_codex\cursor_worker\worker.mjs `
-            -Destination (Join-Path $InstallRoot "sudhir_codex\cursor_worker\worker.mjs")
-
-          & .\scripts\sudhir-codex.ps1 `
-            -Archive $Archive `
-            -Checksums $Checksums `
-            -Root $InstallRoot `
-            -State $State `
-            -PiAgentDir $PiAgentDir
-
-          $GatewayPython = Join-Path $InstallRoot ".venv\Scripts\python.exe"
-          $env:SUDHIR_CODEX_ROOT = $InstallRoot
-          $env:SUDHIR_CODEX_STATE = $State
-          $env:SUDHIR_CODEX_PI_AGENT_DIR = $PiAgentDir
-          $Started = $false
-          try {
-            & $GatewayPython -m sudhir_codex_gateway.management start
-            $GatewayStartExit = $LASTEXITCODE
-            if ($GatewayStartExit -ne 0) {
-              $GatewayLog = Join-Path $State "gateway\gateway.log"
-              if (Test-Path -LiteralPath $GatewayLog -PathType Leaf) {
-                Get-Content -LiteralPath $GatewayLog
-              }
-              throw "Gateway start smoke failed"
-            }
-            $Started = $true
-
-            $StatusJson = (& $GatewayPython -m sudhir_codex_gateway.management status --json) -join "`n"
-            if ($LASTEXITCODE -ne 0) { throw "Gateway status smoke failed" }
-            $Status = $StatusJson | ConvertFrom-Json
-            if (-not $Status.running) { throw "Gateway status did not report running" }
-          }
-          finally {
-            if ($Started) {
-              & $GatewayPython -m sudhir_codex_gateway.management stop
-              if ($LASTEXITCODE -ne 0) { throw "Gateway stop smoke failed" }
-            }
-          }
-          if (Test-Path -LiteralPath (Join-Path $State "gateway\gateway.pid")) {
-            throw "Gateway PID file remained after stop"
-          }
 
   rust-focused:
     name: Focused Rust checks (Ubuntu)
