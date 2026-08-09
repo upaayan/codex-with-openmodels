@@ -328,6 +328,92 @@ class OpenAIResponsesTests(unittest.TestCase):
         )
         self.assertIsInstance(upstream["input"][-1]["output"], str)
 
+    def test_responses_loads_only_eight_latest_discovered_tools(self) -> None:
+        request = self.request()
+        request["tools"] = [
+            request["tools"][0],
+            {
+                "type": "tool_search",
+                "description": "Search deferred tools",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            *[
+                {
+                    "type": "function",
+                    "name": f"deferred_{index}",
+                    "description": "Deferred inventory",
+                    "defer_loading": True,
+                    "parameters": {"type": "object", "properties": {}},
+                }
+                for index in range(20)
+            ],
+        ]
+        request["input"].extend(
+            [
+                {
+                    "type": "tool_search_output",
+                    "call_id": "call-search-old",
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "old_discovery",
+                            "description": "Historical result",
+                            "parameters": {"type": "object", "properties": {}},
+                        }
+                    ],
+                },
+                {
+                    "type": "tool_search_output",
+                    "call_id": "call-search-latest",
+                    "tools": [
+                        {
+                            "type": "namespace",
+                            "name": "discovered",
+                            "description": "On-demand namespace",
+                            "tools": [
+                                {
+                                    "type": "function",
+                                    "name": f"leaf_{index}",
+                                    "description": "On demand",
+                                    "parameters": {
+                                        "type": "object",
+                                        "properties": {},
+                                    },
+                                }
+                                for index in range(12)
+                            ],
+                        }
+                    ],
+                },
+            ]
+        )
+
+        upstream, bindings = responses_to_openai_request(request, self.model)
+
+        self.assertEqual(
+            [binding.qualified_name for binding in bindings.bindings],
+            [
+                "shell_command",
+                "tool_search",
+                *[f"discovered.leaf_{index}" for index in range(8)],
+            ],
+        )
+        self.assertEqual(len(upstream["tools"]), 10)
+        search_outputs = {
+            item["call_id"]: json.loads(item["output"])
+            for item in upstream["input"]
+            if item.get("type") == "function_call_output"
+            and str(item.get("call_id", "")).startswith("call-search")
+        }
+        self.assertEqual(search_outputs["call-search-old"], [])
+        self.assertEqual(
+            [
+                child["name"]
+                for child in search_outputs["call-search-latest"][0]["tools"]
+            ],
+            [f"leaf_{index}" for index in range(8)],
+        )
+
     def test_deepseek_adds_object_type_to_root_one_of_tool_schema(self) -> None:
         request = {
             "model": "pi-deepseek/deepseek-v4-flash",
@@ -525,6 +611,13 @@ class OpenAIResponsesTests(unittest.TestCase):
 
         self.assertNotIn("tools", upstream)
         self.assertNotIn("tool_choice", upstream)
+        search_output = next(
+            item
+            for item in upstream["input"]
+            if item.get("type") == "function_call_output"
+            and item.get("call_id") == "call-search-history"
+        )
+        self.assertEqual(json.loads(search_output["output"]), [])
 
 
 if __name__ == "__main__":

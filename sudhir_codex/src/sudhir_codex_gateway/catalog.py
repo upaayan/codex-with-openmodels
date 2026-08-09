@@ -349,7 +349,7 @@ def synthesize_model_info(
         "effective_context_window_percent": 90,
         "experimental_supported_tools": [],
         "input_modalities": modalities,
-        "supports_search_tool": model.api == "openai-responses",
+        "supports_search_tool": model.api in {"openai-completions", "openai-responses"},
         "use_responses_lite": False,
         "auto_review_model_override": None,
         "tool_mode": None,

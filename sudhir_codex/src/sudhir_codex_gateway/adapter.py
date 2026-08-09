@@ -18,6 +18,7 @@ IGNORED_INPUT_TYPES = {
     "context_compaction",
     "compaction_trigger",
 }
+MAX_DISCOVERED_TOOLS = 8
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,18 @@ class ToolBinding:
                 "parameters": self.parameters,
             },
         }
+
+
+@dataclass(frozen=True)
+class ActiveToolSelection:
+    tools: list[object]
+    latest_search_output: dict[str, Any] | None
+    discovered_tools: list[object]
+
+    def visible_search_tools(self, item: dict[str, Any]) -> list[object]:
+        if item is self.latest_search_output:
+            return self.discovered_tools
+        return []
 
 
 class ToolBindings:
@@ -231,6 +244,80 @@ class ToolBindings:
         return binding
 
 
+def select_active_tools(request: dict[str, Any]) -> ActiveToolSelection:
+    """Select direct tools and a bounded projection of the latest search."""
+
+    tools = request.get("tools", [])
+    if tools is None:
+        tools = []
+    if not isinstance(tools, list):
+        raise GatewayError(400, "invalid_tools", "Responses tools must be a list")
+
+    active = _without_deferred_tools(tools)
+    if not any(
+        isinstance(tool, dict) and tool.get("type") == "tool_search" for tool in active
+    ):
+        return ActiveToolSelection(active, None, [])
+
+    input_items = request.get("input", [])
+    if not isinstance(input_items, list):
+        return ActiveToolSelection(active, None, [])
+    for item in reversed(input_items):
+        if not isinstance(item, dict) or item.get("type") != "tool_search_output":
+            continue
+        discovered = item.get("tools", [])
+        selected = (
+            _take_discovered_tools(discovered, MAX_DISCOVERED_TOOLS)
+            if isinstance(discovered, list)
+            else []
+        )
+        active.extend(selected)
+        return ActiveToolSelection(active, item, selected)
+    return ActiveToolSelection(active, None, [])
+
+
+def _without_deferred_tools(tools: list[object]) -> list[object]:
+    active: list[object] = []
+    for tool in tools:
+        if not isinstance(tool, dict) or tool.get("defer_loading") is not True:
+            if isinstance(tool, dict) and tool.get("type") == "namespace":
+                children = tool.get("tools")
+                if isinstance(children, list):
+                    visible_children = [
+                        child
+                        for child in children
+                        if not isinstance(child, dict)
+                        or child.get("defer_loading") is not True
+                    ]
+                    if visible_children:
+                        active.append({**tool, "tools": visible_children})
+                    continue
+            active.append(tool)
+    return active
+
+
+def _take_discovered_tools(tools: list[object], limit: int) -> list[object]:
+    selected: list[object] = []
+    remaining = limit
+    for tool in tools:
+        if remaining == 0:
+            break
+        if not isinstance(tool, dict) or tool.get("type") != "namespace":
+            selected.append(tool)
+            remaining -= 1
+            continue
+        children = tool.get("tools")
+        if not isinstance(children, list):
+            selected.append(tool)
+            remaining -= 1
+            continue
+        selected_children = children[:remaining]
+        if selected_children:
+            selected.append({**tool, "tools": selected_children})
+            remaining -= len(selected_children)
+    return selected
+
+
 def responses_to_chat_request(
     request: object,
     model: OpenModel,
@@ -241,12 +328,14 @@ def responses_to_chat_request(
         raise GatewayError(
             400, "invalid_request", "Responses request must be an object"
         )
-    bindings = ToolBindings(request.get("tools"))
+    selection = select_active_tools(request)
+    bindings = ToolBindings(selection.tools)
     messages = _translate_input(
         request.get("input", []),
         instructions=request.get("instructions"),
         bindings=bindings,
         model=model,
+        tool_selection=selection,
     )
     if not messages:
         raise GatewayError(
@@ -383,6 +472,7 @@ def _translate_input(
     instructions: object,
     bindings: ToolBindings,
     model: OpenModel,
+    tool_selection: ActiveToolSelection,
 ) -> list[dict[str, Any]]:
     if not isinstance(input_items, list):
         raise GatewayError(400, "invalid_input", "Responses input must be a list")
@@ -533,7 +623,7 @@ def _translate_input(
                 )
             output = item.get("output")
             if kind == "tool_search_output":
-                output = item.get("tools", [])
+                output = tool_selection.visible_search_tools(item)
             messages.append(
                 {
                     "role": "tool",

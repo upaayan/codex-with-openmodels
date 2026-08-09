@@ -99,6 +99,30 @@ class CatalogTests(unittest.TestCase):
 
         self.assertTrue(info["supports_search_tool"])
 
+    def test_chat_completion_models_enable_gateway_tool_search(self) -> None:
+        write_json(
+            self.pi_dir / "models.json",
+            {
+                "providers": {
+                    "xai": {
+                        "models": [
+                            {
+                                "id": "grok-4.3",
+                                "reasoning": True,
+                                "input": ["text", "image"],
+                            }
+                        ]
+                    }
+                }
+            },
+        )
+        model = self.loader().load().models[0]
+
+        info = synthesize_model_info(model, "base", 100)
+
+        self.assertEqual(model.api, "openai-completions")
+        self.assertTrue(info["supports_search_tool"])
+
     def test_duplicate_generated_ids_keep_the_first_healthy_model(self) -> None:
         document = basic_pi_document()
         document["providers"]["demo"]["models"].append(

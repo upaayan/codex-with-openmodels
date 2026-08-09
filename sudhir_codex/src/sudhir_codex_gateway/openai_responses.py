@@ -7,6 +7,8 @@ from typing import Any
 
 from .adapter import ToolBinding
 from .adapter import ToolBindings
+from .adapter import ActiveToolSelection
+from .adapter import select_active_tools
 from .catalog import OpenModel
 from .errors import GatewayError
 from .reasoning import reasoning_request_options
@@ -28,12 +30,14 @@ def responses_to_openai_request(
     if not isinstance(input_items, list):
         raise GatewayError(400, "invalid_input", "Responses input must be a list")
 
-    bindings = ToolBindings(_active_tools(request, input_items))
+    selection = select_active_tools(request)
+    bindings = ToolBindings(selection.tools)
     upstream_input = _translate_input(
         input_items,
         instructions=request.get("instructions"),
         bindings=bindings,
         model=model,
+        tool_selection=selection,
     )
     if not upstream_input:
         raise GatewayError(400, "empty_input", "Responses request contains no input")
@@ -123,6 +127,7 @@ def _translate_input(
     instructions: object,
     bindings: ToolBindings,
     model: OpenModel,
+    tool_selection: ActiveToolSelection,
 ) -> list[dict[str, Any]]:
     translated: list[dict[str, Any]] = []
     if isinstance(instructions, str) and instructions:
@@ -187,7 +192,7 @@ def _translate_input(
                 )
             if kind == "tool_search_output":
                 output = json.dumps(
-                    item.get("tools", []),
+                    tool_selection.visible_search_tools(item),
                     ensure_ascii=False,
                     separators=(",", ":"),
                 )
@@ -213,30 +218,6 @@ def _translate_input(
                 f"Responses input item type {kind!r} is unsupported",
             )
     return translated
-
-
-def _active_tools(
-    request: dict[str, Any],
-    input_items: list[object],
-) -> list[object]:
-    tools = request.get("tools", [])
-    if tools is None:
-        tools = []
-    if not isinstance(tools, list):
-        raise GatewayError(400, "invalid_tools", "Responses tools must be a list")
-    available = list(tools)
-    tool_search_active = any(
-        isinstance(tool, dict) and tool.get("type") == "tool_search" for tool in tools
-    )
-    if not tool_search_active:
-        return available
-    for item in input_items:
-        if not isinstance(item, dict) or item.get("type") != "tool_search_output":
-            continue
-        discovered = item.get("tools", [])
-        if isinstance(discovered, list):
-            available.extend(discovered)
-    return available
 
 
 def _translate_message(

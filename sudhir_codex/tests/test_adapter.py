@@ -145,6 +145,123 @@ class AdapterTests(unittest.TestCase):
             {"shell_command", "apply_patch", "multi_agent_v1.spawn_agent"},
         )
 
+    def test_chat_loads_only_eight_latest_discovered_tools(self) -> None:
+        request = self.request()
+        request["tools"] = [
+            request["tools"][0],
+            {
+                "type": "tool_search",
+                "description": "Search deferred tools",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            {
+                "type": "namespace",
+                "name": "mixed",
+                "description": "Mixed direct and deferred tools",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "direct_child",
+                        "description": "Required directly",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                    {
+                        "type": "function",
+                        "name": "deferred_child",
+                        "description": "Load on demand",
+                        "defer_loading": True,
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                ],
+            },
+            *[
+                {
+                    "type": "function",
+                    "name": f"deferred_{index}",
+                    "description": "Deferred inventory",
+                    "defer_loading": True,
+                    "parameters": {"type": "object", "properties": {}},
+                }
+                for index in range(20)
+            ],
+        ]
+        discovered = {
+            "type": "namespace",
+            "name": "discovered",
+            "description": "On-demand namespace",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": f"leaf_{index}",
+                    "description": "On demand",
+                    "parameters": {"type": "object", "properties": {}},
+                }
+                for index in range(12)
+            ],
+        }
+        request["input"].extend(
+            [
+                {
+                    "type": "tool_search_call",
+                    "id": "fc-search-old",
+                    "call_id": "call-search-old",
+                    "status": "completed",
+                    "execution": "client",
+                    "arguments": {"query": "old tools"},
+                },
+                {
+                    "type": "tool_search_output",
+                    "call_id": "call-search-old",
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "old_discovery",
+                            "description": "Historical result",
+                            "parameters": {"type": "object", "properties": {}},
+                        }
+                    ],
+                },
+                {
+                    "type": "tool_search_call",
+                    "id": "fc-search-latest",
+                    "call_id": "call-search-latest",
+                    "status": "completed",
+                    "execution": "client",
+                    "arguments": {"query": "latest tools"},
+                },
+                {
+                    "type": "tool_search_output",
+                    "call_id": "call-search-latest",
+                    "tools": [discovered],
+                },
+            ]
+        )
+
+        chat, bindings = responses_to_chat_request(request, self.model)
+
+        self.assertEqual(
+            [binding.qualified_name for binding in bindings.bindings],
+            [
+                "shell_command",
+                "tool_search",
+                "mixed.direct_child",
+                *[f"discovered.leaf_{index}" for index in range(8)],
+            ],
+        )
+        self.assertEqual(len(chat["tools"]), 11)
+        search_messages = [
+            message
+            for message in chat["messages"]
+            if message.get("role") == "tool"
+            and str(message.get("tool_call_id", "")).startswith("call-search")
+        ]
+        self.assertEqual(json.loads(search_messages[0]["content"]), [])
+        visible = json.loads(search_messages[1]["content"])
+        self.assertEqual(
+            [child["name"] for child in visible[0]["tools"]],
+            [f"leaf_{index}" for index in range(8)],
+        )
+
     def test_direct_deepseek_translates_none_high_and_max(self) -> None:
         model = self.load_model(
             "deepseek",

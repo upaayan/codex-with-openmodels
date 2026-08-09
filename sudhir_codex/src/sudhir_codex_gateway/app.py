@@ -429,13 +429,16 @@ class GatewayApp:
                 f"Provider {model.provider_id!r} attempted a redirect",
             )
         if upstream.status_code >= 400:
-            raise GatewayError(
-                502,
-                "pi_provider_error",
-                (
-                    f"Provider {model.provider_id!r} returned HTTP "
-                    f"{upstream.status_code}"
-                ),
+            response_headers = {
+                name: value
+                for name, value in upstream.headers.items()
+                if name.lower() in {"content-type", "request-id", "x-request-id"}
+            }
+            response_headers.setdefault("content-type", "application/json")
+            return BufferedResponse(
+                status=upstream.status_code,
+                headers=response_headers,
+                body=upstream.content,
             )
         try:
             upstream_json = upstream.json()
