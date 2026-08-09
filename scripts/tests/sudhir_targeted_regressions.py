@@ -14,6 +14,7 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 GATEWAY_TESTS = (
     "test_catalog.CatalogTests.test_synthesized_model_is_picker_and_agent_visible",
+    "test_catalog.CatalogTests.test_chat_completion_models_enable_gateway_tool_search",
     "test_cursor_catalog.CursorCatalogTests.test_model_metadata_is_picker_and_subagent_visible",
     "test_adapter.AdapterTests.test_translates_messages_tools_and_reasoning",
     "test_adapter.AdapterTests.test_round_trips_function_custom_and_namespaced_calls",
@@ -25,6 +26,7 @@ GATEWAY_TESTS = (
     "test_adapter.AdapterTests.test_maps_reasoning_token_usage_to_responses_details",
     "test_adapter.AdapterTests.test_preserves_tool_history_for_next_chat_turn",
     "test_adapter.AdapterTests.test_history_only_exec_command_is_serializable_but_not_callable",
+    "test_adapter.AdapterTests.test_chat_loads_only_eight_latest_discovered_tools",
     "test_anthropic.AnthropicAdapterTests.test_translates_tools_images_and_tool_history",
     "test_anthropic.AnthropicAdapterTests.test_round_trips_thinking_text_and_opaque_signature",
     "test_openai_responses.OpenAIResponsesTests.test_translates_codex_tools_and_preserves_responses_history",
@@ -33,8 +35,10 @@ GATEWAY_TESTS = (
     "test_openai_responses.OpenAIResponsesTests.test_deepseek_adds_object_type_to_root_one_of_tool_schema",
     "test_openai_responses.OpenAIResponsesTests.test_history_only_exec_command_is_serializable_but_not_callable",
     "test_openai_responses.OpenAIResponsesTests.test_historical_discovered_tools_require_active_tool_search",
+    "test_openai_responses.OpenAIResponsesTests.test_responses_loads_only_eight_latest_discovered_tools",
     "test_credentials.CredentialTests.test_arbitrary_oauth_provider_delegates_to_pi_without_allowlist",
     "test_app.GatewayAppTests.test_xai_grok45_uses_responses_transport",
+    "test_app.GatewayAppTests.test_pi_provider_error_preserves_status_body_and_request_id",
 )
 RUST_TESTS = (
     "pre_sampling_compact_uses_selected_model_on_switch_to_smaller_context_model",

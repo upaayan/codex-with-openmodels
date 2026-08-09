@@ -140,6 +140,71 @@ class GatewayAppTests(unittest.TestCase):
         self.assertNotIn("chatgpt-secret", audit)
         self.assertNotIn("account-secret", audit)
 
+    def test_pi_provider_error_preserves_status_body_and_request_id(self) -> None:
+        cases = (
+            (
+                400,
+                b'{"error":{"message":"414 tools exceeds maximum 350"}}\n',
+                {
+                    "X-Request-Id": "xai-request-400",
+                    "Set-Cookie": "provider-secret=must-not-leak",
+                },
+                "application/json",
+            ),
+            (
+                401,
+                b'{"error":{"message":"provider credential expired"}}',
+                {
+                    "Content-Type": "application/problem+json",
+                    "Request-Id": "provider-request-401",
+                },
+                "application/problem+json",
+            ),
+        )
+
+        for status, body, headers, expected_content_type in cases:
+            with self.subTest(status=status):
+                def handler(_request: httpx.Request) -> httpx.Response:
+                    return httpx.Response(status, headers=headers, content=body)
+
+                app = GatewayApp(
+                    self.settings,
+                    http_client=httpx.Client(
+                        transport=httpx.MockTransport(handler)
+                    ),
+                )
+                try:
+                    response = app.responses(
+                        {GATEWAY_TOKEN_HEADER: "gateway-secret"},
+                        json.dumps(
+                            {
+                                "model": "pi-demo/demo/model",
+                                "input": [
+                                    {
+                                        "type": "message",
+                                        "role": "user",
+                                        "content": [
+                                            {"type": "input_text", "text": "hello"}
+                                        ],
+                                    }
+                                ],
+                            }
+                        ).encode(),
+                    )
+                finally:
+                    app.close()
+
+                self.assertIsInstance(response, BufferedResponse)
+                self.assertEqual(response.status, status)
+                self.assertEqual(
+                    response.headers["content-type"], expected_content_type
+                )
+                self.assertEqual(response.body, body)
+                for name, value in headers.items():
+                    if name.lower() in {"request-id", "x-request-id"}:
+                        self.assertEqual(response.headers[name.lower()], value)
+                self.assertNotIn("set-cookie", response.headers)
+
     def test_cursor_request_uses_the_native_worker_and_returns_responses_sse(
         self,
     ) -> None:
