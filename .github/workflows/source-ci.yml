@@ -39,7 +39,7 @@ jobs:
               wc -l |
               tr -d ' '
           )"
-          [[ "$workflow_count" == "3" ]]
+          [[ "$workflow_count" == "4" ]]
 
           forbidden_paths=(
             documents/BACKEND-MONTHLY-UPGRADE.md
@@ -153,50 +153,3 @@ jobs:
           python scripts/tests/sudhir_targeted_regressions.py gateway
           ruff check sudhir_codex/src sudhir_codex/tests
           bash scripts/tests/install-sudhir-codex.tests.sh
-
-  rust-focused:
-    name: Focused Rust checks (Ubuntu)
-    runs-on: ubuntu-22.04
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/setup-ci
-      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
-        with:
-          components: rustfmt
-      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
-        with:
-          tool: nextest
-          version: 0.9.103
-
-      - name: Install focused-test system dependencies
-        run: |
-          sudo apt-get update -y
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            --no-install-recommends pkg-config libcap-dev bubblewrap
-
-      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        with:
-          version: "0.11.3"
-
-      - name: Check formatting
-        working-directory: codex-rs
-        run: just fmt-check
-
-      - name: Run fork regressions
-        working-directory: codex-rs
-        run: |
-          just test -p codex-tui reasoning
-          just test -p codex-tui model_picker_searches_model_names_and_providers
-          just test -p codex-tui queued_settings_selection_applies_before_next_input
-          just test -p codex-tui active_reasoning_effort_does_not_change_new_task_default
-          just test -p codex-tui active_plan_reasoning_effort_does_not_change_new_task_default
-          just test -p codex-app-server config_batch_write_keeps_model_defaults_while_writing_other_settings
-          just test -p codex-tui picker_searches_merged_model_names_and_providers
-          just test -p codex-tui max_and_ultra_are_visible_and_keyboard_reachable
-          just test -p codex-app-server active_selection_never_rewrites_new_task_defaults
-
-      - name: Run targeted model-switch regressions
-        run: python3 scripts/tests/sudhir_targeted_regressions.py rust
