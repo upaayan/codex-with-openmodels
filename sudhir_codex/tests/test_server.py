@@ -14,6 +14,9 @@ class StubApp:
     def __init__(self) -> None:
         self.health_calls = 0
         self.model_calls = 0
+        self.search_calls: list[bytes] = []
+        self.image_generation_calls: list[bytes] = []
+        self.image_edit_calls: list[bytes] = []
 
     def authenticate(self, provided: str | None) -> bool:
         return provided == "local-secret"
@@ -38,6 +41,42 @@ class StubApp:
             b'{"models":[]}',
         )
 
+    def search(
+        self,
+        _incoming_headers: dict[str, str],
+        body: bytes,
+    ) -> BufferedResponse:
+        self.search_calls.append(body)
+        return BufferedResponse(
+            200,
+            {"Content-Type": "application/json"},
+            b'{"output":"found"}',
+        )
+
+    def generate_image(
+        self,
+        _incoming_headers: dict[str, str],
+        body: bytes,
+    ) -> BufferedResponse:
+        self.image_generation_calls.append(body)
+        return BufferedResponse(
+            200,
+            {"Content-Type": "application/json"},
+            b'{"data":[{"b64_json":"image-data"}]}',
+        )
+
+    def edit_image(
+        self,
+        _incoming_headers: dict[str, str],
+        body: bytes,
+    ) -> BufferedResponse:
+        self.image_edit_calls.append(body)
+        return BufferedResponse(
+            200,
+            {"Content-Type": "application/json"},
+            b'{"data":[{"b64_json":"edited-image-data"}]}',
+        )
+
 
 def get(
     port: int,
@@ -48,6 +87,27 @@ def get(
     headers = {GATEWAY_TOKEN_HEADER: token} if token is not None else {}
     try:
         connection.request("GET", path, headers=headers)
+        response = connection.getresponse()
+        return response.status, response.read()
+    finally:
+        connection.close()
+
+
+def post(
+    port: int,
+    path: str,
+    body: bytes,
+    token: str | None = None,
+) -> tuple[int, bytes]:
+    connection = http.client.HTTPConnection(LOOPBACK_HOST, port, timeout=3)
+    headers = {
+        "Content-Type": "application/json",
+        "Content-Length": str(len(body)),
+    }
+    if token is not None:
+        headers[GATEWAY_TOKEN_HEADER] = token
+    try:
+        connection.request("POST", path, body=body, headers=headers)
         response = connection.getresponse()
         return response.status, response.read()
     finally:
@@ -100,6 +160,51 @@ class GatewayServerTests(unittest.TestCase):
 
         self.assertEqual([status for status, _body in results], [200] * 8)
         self.assertEqual(self.app.model_calls, 8)
+
+    def test_authorized_standalone_search_route(self) -> None:
+        request_body = b'{"model":"pi-deepseek/deepseek-v4-flash"}'
+
+        status, body = post(
+            self.port,
+            "/v1/alpha/search",
+            request_body,
+            "local-secret",
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"output": "found"})
+        self.assertEqual(self.app.search_calls, [request_body])
+
+    def test_authorized_image_generation_route(self) -> None:
+        request_body = b'{"model":"gpt-image-2","prompt":"private prompt"}'
+
+        status, body = post(
+            self.port,
+            "/v1/images/generations",
+            request_body,
+            "local-secret",
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"data": [{"b64_json": "image-data"}]})
+        self.assertEqual(self.app.image_generation_calls, [request_body])
+
+    def test_authorized_image_edit_route(self) -> None:
+        request_body = b'{"model":"gpt-image-2","prompt":"edit prompt"}'
+
+        status, body = post(
+            self.port,
+            "/v1/images/edits",
+            request_body,
+            "local-secret",
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            json.loads(body),
+            {"data": [{"b64_json": "edited-image-data"}]},
+        )
+        self.assertEqual(self.app.image_edit_calls, [request_body])
 
     def test_non_loopback_bind_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "only to 127.0.0.1"):
