@@ -254,6 +254,7 @@ mod slash_commands;
 mod status_and_layout;
 mod status_command_tests;
 mod status_surface_previews;
+mod sudhir_model_picker;
 mod terminal_title;
 mod usage;
 

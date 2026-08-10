@@ -662,6 +662,7 @@ class GatewayApp:
         incoming_headers: dict[str, str],
         model_id: str,
     ) -> StreamingResponse:
+        request = _gpt_compatible_request(request)
         target = f"{self.settings.chatgpt_base_url.rstrip('/')}/responses"
         headers = _chatgpt_headers(incoming_headers)
         destination = urlparse(target).hostname or "chatgpt.com"
@@ -808,6 +809,30 @@ class GatewayApp:
                 "utf-8"
             ),
         )
+
+
+def _gpt_compatible_request(request: dict[str, Any]) -> dict[str, Any]:
+    input_items = request.get("input")
+    if not isinstance(input_items, list):
+        return request
+
+    filtered_items = [
+        item
+        for item in input_items
+        if not (
+            isinstance(item, dict)
+            and item.get("type") == "reasoning"
+            and isinstance(item.get("content"), list)
+            and bool(item["content"])
+            and not (
+                isinstance(item.get("encrypted_content"), str)
+                and bool(item["encrypted_content"])
+            )
+        )
+    ]
+    if len(filtered_items) == len(input_items):
+        return request
+    return {**request, "input": filtered_items}
 
 
 def _chatgpt_headers(incoming: dict[str, str]) -> dict[str, str]:

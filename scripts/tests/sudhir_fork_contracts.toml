@@ -1,0 +1,496 @@
+schema_version = 1
+
+[[contract]]
+id = "SC-STATE-001"
+behavior = "Private state and auth are independent regular-file copies; official Codex state is untouched"
+patch = "fork[state]"
+source = ["sudhir_codex/src/sudhir_codex_gateway/state.py", "sudhir_codex/src/sudhir_codex_gateway/launcher.py"]
+test_file = "sudhir_codex/tests/contracts/test_state.py"
+test_runner = "python-unittest"
+test_name = "StateContracts.test_private_state_and_auth_are_isolated_regular_files"
+acceptance_case = "private-state-isolation"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux"]
+lane = "gateway"
+platforms = ["linux"]
+always = false
+
+[[contract]]
+id = "SC-GATEWAY-001"
+behavior = "The authenticated gateway accepts only loopback binding"
+patch = "fork[launcher]"
+source = ["sudhir_codex/src/sudhir_codex_gateway/server.py", "sudhir_codex/src/sudhir_codex_gateway/launcher.py"]
+test_file = "sudhir_codex/tests/contracts/test_gateway.py"
+test_runner = "python-unittest"
+test_name = "GatewayContracts.test_authenticated_gateway_is_loopback_only"
+acceptance_case = "gateway-auth-loopback"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux"]
+lane = "gateway"
+platforms = ["linux"]
+always = false
+
+[[contract]]
+id = "SC-GATEWAY-002"
+behavior = "The gateway client token never reaches model-invoked shell snapshots"
+patch = "fork[launcher]"
+source = ["codex-rs/core/src/exec_env.rs", "codex-rs/core/src/shell_snapshot.rs"]
+test_file = "codex-rs/core/src/sudhir_launcher_contracts_tests.rs"
+test_runner = "rust-nextest"
+test_name = "gateway_token_is_absent_from_model_shell_snapshot"
+acceptance_case = "gateway-token-exclusion"
+acceptance_mode = "artifact"
+acceptance_hosts = ["staged-macos"]
+lane = "core"
+platforms = ["linux"]
+always = false
+
+[[contract]]
+id = "SC-GATEWAY-003"
+behavior = "Pi-provider HTTP errors preserve upstream status, body, content type, and request IDs instead of becoming a generic gateway 502"
+patch = "fix(gateway)"
+source = ["sudhir_codex/src/sudhir_codex_gateway/app.py"]
+test_file = "sudhir_codex/tests/test_app.py"
+test_runner = "python-unittest"
+test_name = "test_app.GatewayAppTests.test_pi_provider_error_preserves_status_body_and_request_id"
+acceptance_case = "provider-error-transparency"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux"]
+lane = "gateway"
+platforms = ["linux"]
+always = true
+
+[[contract]]
+id = "SC-WEB-SEARCH-001"
+behavior = "Pi and other open-model routes receive Codex standalone web.run, whose authenticated search requests are proxied through the ChatGPT Codex search backend without changing normal model routing"
+patch = "fork[web-search]"
+source = ["sudhir_codex/src/sudhir_codex_gateway/state.py", "sudhir_codex/src/sudhir_codex_gateway/launcher.py", "sudhir_codex/src/sudhir_codex_gateway/server.py", "sudhir_codex/src/sudhir_codex_gateway/app.py"]
+test_file = "sudhir_codex/tests/contracts/test_web_search.py"
+test_runner = "python-unittest"
+test_name = "WebSearchContracts.test_pi_standalone_web_search_is_configured_and_proxied"
+acceptance_case = "standalone-web-search"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux"]
+lane = "gateway"
+platforms = ["linux"]
+always = false
+
+[[contract]]
+id = "SC-ARG0-001"
+behavior = "Regular-file and hard-link invocation work without installing or impersonating a command named codex"
+patch = "fork[launcher]"
+source = ["codex-rs/arg0/src/lib.rs", "codex-rs/cli/src/main.rs"]
+test_file = "codex-rs/arg0/src/sudhir_arg0_contracts_tests.rs"
+test_runner = "rust-nextest"
+test_name = "regular_file_and_hard_link_invocations_preserve_sudhir_identity"
+acceptance_case = "arg0-identity"
+acceptance_mode = "artifact"
+acceptance_hosts = ["staged-macos"]
+lane = "core"
+platforms = ["linux"]
+always = false
+
+[[contract]]
+id = "SC-CATALOG-001"
+behavior = "GPT and open-model catalogs merge with collision-free model IDs"
+patch = "fork[catalog]"
+source = ["sudhir_codex/src/sudhir_codex_gateway/catalog.py", "sudhir_codex/src/sudhir_codex_gateway/cursor_catalog.py", "sudhir_codex/src/sudhir_codex_gateway/app.py"]
+test_file = "sudhir_codex/tests/contracts/test_catalog.py"
+test_runner = "python-unittest"
+test_name = "CatalogContracts.test_merged_catalog_has_unique_gpt_pi_and_cursor_ids"
+acceptance_case = "merged-catalog"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux"]
+lane = "gateway"
+platforms = ["linux"]
+always = false
+
+[[contract]]
+id = "SC-CATALOG-002"
+behavior = "The model visibility policy controls picker and agent visibility"
+patch = "fork[catalog]"
+source = ["sudhir_codex/src/sudhir_codex_gateway/visibility.py", "sudhir_codex/src/sudhir_codex_gateway/catalog.py"]
+test_file = "sudhir_codex/tests/contracts/test_catalog.py"
+test_runner = "python-unittest"
+test_name = "CatalogContracts.test_visibility_policy_controls_picker_and_agent_metadata"
+acceptance_case = "catalog-visibility"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux"]
+lane = "gateway"
+platforms = ["linux"]
+always = false
+
+[[contract]]
+id = "SC-CREDENTIALS-001"
+behavior = "Each route receives only its own credentials and GPT requests retain ChatGPT auth without the gateway secret"
+patch = "fork[catalog]"
+source = ["sudhir_codex/src/sudhir_codex_gateway/credentials.py", "sudhir_codex/src/sudhir_codex_gateway/app.py"]
+test_file = "sudhir_codex/tests/contracts/test_credentials.py"
+test_runner = "python-unittest"
+test_name = "CredentialContracts.test_route_credentials_are_isolated"
+acceptance_case = "credential-isolation"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux"]
+lane = "gateway"
+platforms = ["linux"]
+always = false
+
+[[contract]]
+id = "SC-REASONING-001"
+behavior = "Every route advertises and sends only its supported reasoning controls"
+patch = "fork[reasoning]"
+source = ["sudhir_codex/src/sudhir_codex_gateway/reasoning.py", "sudhir_codex/src/sudhir_codex_gateway/catalog.py", "sudhir_codex/src/sudhir_codex_gateway/adapter.py"]
+test_file = "sudhir_codex/tests/contracts/test_reasoning.py"
+test_runner = "python-unittest"
+test_name = "ReasoningContracts.test_route_aware_reasoning_controls"
+acceptance_case = "route-reasoning-controls"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux"]
+lane = "gateway"
+platforms = ["linux"]
+always = false
+
+[[contract]]
+id = "SC-REASONING-002"
+behavior = "DeepSeek Responses receives provider-compatible root-oneOf tool schemas, and DeepSeek and OpenCode replay one assistant completion atomically with reasoning, visible text, and all tool calls"
+patch = "fork[reasoning]"
+source = ["sudhir_codex/src/sudhir_codex_gateway/adapter.py", "sudhir_codex/src/sudhir_codex_gateway/openai_responses.py"]
+test_file = "sudhir_codex/tests/contracts/test_reasoning.py"
+test_runner = "python-unittest"
+test_name = "ReasoningContracts.test_deepseek_and_opencode_atomic_reasoning_text_tool_replay"
+acceptance_case = "deepseek-opencode-replay"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux"]
+lane = "gateway"
+platforms = ["linux"]
+always = false
+
+[[contract]]
+id = "SC-REASONING-003"
+behavior = "Provider reasoning-token usage reaches Responses output-token details"
+patch = "fork[reasoning]"
+source = ["sudhir_codex/src/sudhir_codex_gateway/adapter.py"]
+test_file = "sudhir_codex/tests/contracts/test_reasoning.py"
+test_runner = "python-unittest"
+test_name = "ReasoningContracts.test_reasoning_token_accounting_survives_translation"
+acceptance_case = "reasoning-token-accounting"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux"]
+lane = "gateway"
+platforms = ["linux"]
+always = false
+
+[[contract]]
+id = "SC-REASONING-004"
+behavior = "Native encrypted reasoning is replayed only to the exact provider/model/API/base-URL route that created it"
+patch = "fork[reasoning]"
+source = ["sudhir_codex/src/sudhir_codex_gateway/openai_responses.py"]
+test_file = "sudhir_codex/tests/contracts/test_reasoning.py"
+test_runner = "python-unittest"
+test_name = "ReasoningContracts.test_encrypted_reasoning_is_route_scoped"
+acceptance_case = "encrypted-reasoning-route-scope"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux"]
+lane = "gateway"
+platforms = ["linux"]
+always = false
+
+[[contract]]
+id = "SC-REASONING-005"
+behavior = "Returning from an open model to GPT omits foreign plaintext reasoning while preserving visible history and GPT-owned encrypted reasoning"
+patch = "fork[reasoning]"
+source = ["sudhir_codex/src/sudhir_codex_gateway/app.py"]
+test_file = "sudhir_codex/tests/contracts/test_reasoning.py"
+test_runner = "python-unittest"
+test_name = "ReasoningContracts.test_gpt_omits_foreign_plaintext_reasoning_on_return_switch"
+acceptance_case = "gpt-open-gpt-return"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux"]
+lane = "gateway"
+platforms = ["linux"]
+always = false
+
+[[contract]]
+id = "SC-HISTORY-001"
+behavior = "Historical exec_command is serializable for replay but is not advertised or callable without current authorization"
+patch = "fork[history-tools]"
+source = ["sudhir_codex/src/sudhir_codex_gateway/adapter.py", "sudhir_codex/src/sudhir_codex_gateway/openai_responses.py"]
+test_file = "sudhir_codex/tests/contracts/test_history_tools.py"
+test_runner = "python-unittest"
+test_name = "HistoryToolContracts.test_history_exec_is_serializable_but_not_callable"
+acceptance_case = "history-exec-model-switch"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux"]
+lane = "gateway"
+platforms = ["linux"]
+always = false
+
+[[contract]]
+id = "SC-COMPACTION-001"
+behavior = "Genuine pressure compacts and samples with the newly selected model, never the previous provider"
+patch = "fork[model-continuity]"
+source = ["codex-rs/core/src/session/turn.rs", "codex-rs/core/src/session/turn_context.rs"]
+test_file = "codex-rs/core/tests/suite/sudhir_model_continuity.rs"
+test_runner = "rust-nextest"
+test_name = "pressure_compaction_uses_selected_model"
+acceptance_case = "selected-model-pressure"
+acceptance_mode = "artifact"
+acceptance_hosts = ["staged-macos"]
+lane = "core"
+platforms = ["linux"]
+always = false
+
+[[contract]]
+id = "SC-COMPACTION-002"
+behavior = "Model, provider, or comp_hash change alone never causes compaction"
+patch = "fork[model-continuity]"
+source = ["codex-rs/core/src/session/turn.rs", "codex-rs/core/src/session/turn_context.rs"]
+test_file = "codex-rs/core/tests/suite/sudhir_model_continuity.rs"
+test_runner = "rust-nextest"
+test_name = "model_provider_and_hash_change_do_not_compact_without_pressure"
+acceptance_case = "same-model-cross-provider"
+acceptance_mode = "artifact"
+acceptance_hosts = ["staged-macos"]
+lane = "core"
+platforms = ["linux"]
+always = false
+
+[[contract]]
+id = "SC-COMPACTION-003"
+behavior = "Resuming a legacy rollout with an old synthetic hash cannot route a request to the old provider or compact without pressure"
+patch = "fork[model-continuity]"
+source = ["codex-rs/core/src/session/turn.rs", "codex-rs/core/src/session/turn_context.rs"]
+test_file = "codex-rs/core/tests/suite/sudhir_model_continuity.rs"
+test_runner = "rust-nextest"
+test_name = "legacy_hash_resume_uses_selected_model_without_spurious_compaction"
+acceptance_case = "legacy-rollout-resume"
+acceptance_mode = "artifact"
+acceptance_hosts = ["staged-macos"]
+lane = "core"
+platforms = ["linux"]
+always = false
+
+[[contract]]
+id = "SC-COMPACTION-004"
+behavior = "Synthesized Pi and Cursor catalog entries contain no fabricated comp_hash"
+patch = "fork[model-continuity]"
+source = ["sudhir_codex/src/sudhir_codex_gateway/catalog.py", "sudhir_codex/src/sudhir_codex_gateway/cursor_catalog.py"]
+test_file = "sudhir_codex/tests/contracts/test_catalog.py"
+test_runner = "python-unittest"
+test_name = "CatalogContracts.test_pi_and_cursor_models_have_no_synthetic_comp_hash"
+acceptance_case = "catalog-no-synthetic-hash"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux"]
+lane = "gateway"
+platforms = ["linux"]
+always = false
+
+[[contract]]
+id = "SC-OAUTH-001"
+behavior = "Python delegates any Pi-registered OAuth provider without xAI or xai2 allowlists or hand-written refresh code"
+patch = "fork[oauth]"
+source = ["sudhir_codex/src/sudhir_codex_gateway/credentials.py", "sudhir_codex/src/sudhir_codex_gateway/pi_auth_worker.py"]
+test_file = "sudhir_codex/tests/contracts/test_oauth.py"
+test_runner = "python-unittest"
+test_name = "OAuthContracts.test_arbitrary_pi_oauth_provider_needs_no_gateway_allowlist"
+acceptance_case = "generic-pi-oauth"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux"]
+lane = "gateway"
+platforms = ["linux"]
+always = false
+
+[[contract]]
+id = "SC-OAUTH-WORKER-001"
+behavior = "The pinned Node worker resolves an arbitrary OAuth provider through its ordinary Pi extension"
+patch = "fork[oauth]"
+source = ["sudhir_codex/cursor_worker/pi-auth-worker.mjs"]
+test_file = "sudhir_codex/cursor_worker/pi-auth-worker.test.mjs"
+test_runner = "node-test"
+test_name = "resolves an arbitrary OAuth provider through its Pi extension"
+acceptance_case = "generic-pi-oauth-worker"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux"]
+lane = "node"
+platforms = ["linux"]
+always = false
+
+[[contract]]
+id = "SC-XAI-001"
+behavior = "xAI Responses routes use the Responses transport and normal provider-scoped reasoning replay"
+patch = "fork[oauth]"
+source = ["sudhir_codex/src/sudhir_codex_gateway/app.py", "sudhir_codex/src/sudhir_codex_gateway/openai_responses.py"]
+test_file = "sudhir_codex/tests/contracts/test_oauth.py"
+test_runner = "python-unittest"
+test_name = "OAuthContracts.test_xai_route_uses_responses_without_hardcoding"
+acceptance_case = "xai-responses-route"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux"]
+lane = "gateway"
+platforms = ["linux"]
+always = false
+
+[[contract]]
+id = "SC-AGENTS-001"
+behavior = "Under sudhir_agents, every available parent and child model/provider class uses plaintext inter-agent messages; no cross-provider child receives encrypted_content"
+patch = "fork[agents]"
+source = ["codex-rs/core/src/tools/handlers/multi_agents_v2.rs"]
+test_file = "codex-rs/core/tests/suite/sudhir_cross_provider_agents.rs"
+test_runner = "rust-nextest"
+test_name = "all_parent_and_child_routes_use_plaintext_sudhir_agent_messages"
+acceptance_case = "sol-parent-luna-child"
+acceptance_mode = "artifact"
+acceptance_hosts = ["staged-macos"]
+lane = "core"
+platforms = ["linux"]
+always = true
+
+[[contract]]
+id = "SC-AGENTS-002"
+behavior = "One response can emit and preserve six independent agent calls"
+patch = "fork[agents]"
+source = ["sudhir_codex/src/sudhir_codex_gateway/adapter.py", "sudhir_codex/src/sudhir_codex_gateway/launcher.py"]
+test_file = "sudhir_codex/tests/contracts/test_agents.py"
+test_runner = "python-unittest"
+test_name = "AgentContracts.test_six_agent_calls_are_preserved"
+acceptance_case = "six-agent-capacity"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux"]
+lane = "gateway"
+platforms = ["linux"]
+always = false
+
+[[contract]]
+id = "SC-PI-TOOLS-001"
+behavior = "Core does not advertise unsupported OpenAI-hosted search or image tools to Pi routes"
+patch = "fork[agents]"
+source = ["codex-rs/core/src/tools/spec_plan.rs"]
+test_file = "codex-rs/core/tests/suite/sudhir_cross_provider_agents.rs"
+test_runner = "rust-nextest"
+test_name = "pi_routes_suppress_provider_hosted_tools"
+acceptance_case = "pi-hosted-tool-suppression"
+acceptance_mode = "artifact"
+acceptance_hosts = ["staged-macos"]
+lane = "core"
+platforms = ["linux"]
+always = false
+
+[[contract]]
+id = "SC-PI-TOOLS-002"
+behavior = "The translated Pi gateway rejects provider-hosted search or image payloads instead of forwarding them upstream"
+patch = "fork[agents]"
+source = ["sudhir_codex/src/sudhir_codex_gateway/adapter.py"]
+test_file = "sudhir_codex/tests/contracts/test_agents.py"
+test_runner = "python-unittest"
+test_name = "AgentContracts.test_gateway_rejects_provider_hosted_tools_for_pi"
+acceptance_case = "pi-hosted-tool-gateway-rejection"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux"]
+lane = "gateway"
+platforms = ["linux"]
+always = false
+
+[[contract]]
+id = "SC-PI-TOOLS-003"
+behavior = "Deferred inventory stays on demand; providers receive direct tools plus tool_search plus at most eight discovered leaves, with visible discoveries equal to callable bindings"
+patch = "fix(gateway)"
+source = ["sudhir_codex/src/sudhir_codex_gateway/adapter.py", "sudhir_codex/src/sudhir_codex_gateway/catalog.py", "sudhir_codex/src/sudhir_codex_gateway/openai_responses.py"]
+test_file = "sudhir_codex/tests/test_adapter.py"
+test_runner = "python-unittest"
+test_name = "test_adapter.AdapterTests.test_chat_loads_only_eight_latest_discovered_tools"
+acceptance_case = "deferred-tool-bound"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux"]
+lane = "gateway"
+platforms = ["linux"]
+always = true
+
+[[contract]]
+id = "SC-TUI-001"
+behavior = "/model exposes and searches the merged model/provider catalog"
+patch = "fork[tui]"
+source = ["codex-rs/tui/src/chatwidget/model_popups.rs"]
+test_file = "codex-rs/tui/src/chatwidget/tests/sudhir_model_picker.rs"
+test_runner = "rust-nextest"
+test_name = "picker_searches_merged_model_names_and_providers"
+acceptance_case = "merged-model-picker"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux"]
+lane = "tui-app-server"
+platforms = ["linux"]
+always = false
+
+[[contract]]
+id = "SC-TUI-002"
+behavior = "Max and Ultra appear and Option-plus-dot reaches them when the selected model advertises them"
+patch = "fork[tui]"
+source = ["codex-rs/tui/src/chatwidget/model_popups.rs", "codex-rs/tui/src/chatwidget/reasoning_shortcuts.rs"]
+test_file = "codex-rs/tui/src/chatwidget/tests/sudhir_model_picker.rs"
+test_runner = "rust-nextest"
+test_name = "max_and_ultra_are_visible_and_keyboard_reachable"
+acceptance_case = "max-ultra-effort"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux"]
+lane = "tui-app-server"
+platforms = ["linux"]
+always = false
+
+[[contract]]
+id = "SC-TUI-003"
+behavior = "Model or effort changes affect only the active task; app-server batch writes retain unrelated settings without rewriting defaults"
+patch = "fork[tui]"
+source = ["codex-rs/tui/src/app/config_persistence.rs", "codex-rs/tui/src/app/event_dispatch.rs", "codex-rs/app-server/src/request_processors/config_processor.rs"]
+test_file = "codex-rs/app-server/tests/suite/v2/sudhir_active_task_config.rs"
+test_runner = "rust-nextest"
+test_name = "active_selection_never_rewrites_new_task_defaults"
+acceptance_case = "active-task-only-config"
+acceptance_mode = "ci"
+acceptance_hosts = ["github-linux"]
+lane = "tui-app-server"
+platforms = ["linux"]
+always = false
+
+[[contract]]
+id = "SC-SOURCE-001"
+behavior = "Public release source contains only the approved workflow and source surface and no private operational files or personal paths"
+patch = "fork[packaging]"
+source = [".github/workflows/source-ci.yml", "scripts/tests/run_sudhir_fork_contracts.py", "scripts/tests/verify_sudhir_fork_contracts.py", "scripts/tests/sudhir_native_packaging_contracts.py"]
+test_file = "scripts/tests/sudhir_native_packaging_contracts.py"
+test_runner = "python-unittest"
+test_name = "NativePackagingContracts.test_public_source_boundaries"
+acceptance_case = "public-source-boundary"
+acceptance_mode = "source"
+acceptance_hosts = ["github-linux"]
+lane = "packaging"
+platforms = ["linux"]
+always = false
+
+[[contract]]
+id = "SC-PACKAGING-001"
+behavior = "Native archive layout and SHA256SUMS agree exactly"
+patch = "fork[packaging]"
+source = [".github/workflows/native-release.yml", "scripts/install-sudhir-codex"]
+test_file = "scripts/tests/sudhir_native_packaging_contracts.py"
+test_runner = "python-unittest"
+test_name = "NativePackagingContracts.test_archive_layout_and_checksums"
+acceptance_case = "native-archive-integrity"
+acceptance_mode = "artifact"
+acceptance_hosts = ["staged-macos"]
+lane = "packaging"
+platforms = ["linux"]
+always = false
+
+[[contract]]
+id = "SC-PACKAGING-002"
+behavior = "The extracted native archive starts the CLI, app-server help, and MCP help before installation"
+patch = "fork[packaging]"
+source = [".github/workflows/native-release.yml", "scripts/install-sudhir-codex"]
+test_file = "scripts/tests/sudhir_native_packaging_contracts.py"
+test_runner = "python-unittest"
+test_name = "NativePackagingContracts.test_extracted_archive_starts_required_commands"
+acceptance_case = "staged-native-startup"
+acceptance_mode = "artifact"
+acceptance_hosts = ["staged-macos"]
+lane = "packaging"
+platforms = ["linux"]
+always = false
