@@ -85,7 +85,12 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
             return
         parsed = urlsplit(self.path)
         try:
-            if parsed.path != "/v1/responses":
+            if parsed.path not in {
+                "/v1/responses",
+                "/v1/alpha/search",
+                "/v1/images/generations",
+                "/v1/images/edits",
+            }:
                 raise GatewayError(404, "not_found", "Gateway route not found")
             content_encoding = self.headers.get("Content-Encoding", "identity").lower()
             if content_encoding not in {"", "identity"}:
@@ -95,7 +100,20 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
                     "Compressed gateway requests are disabled",
                 )
             body = self._read_body()
-            result = self.gateway.app.responses(self._incoming_headers(), body)
+            if parsed.path == "/v1/alpha/search":
+                result = self.gateway.app.search(self._incoming_headers(), body)
+            elif parsed.path == "/v1/images/generations":
+                result = self.gateway.app.generate_image(
+                    self._incoming_headers(),
+                    body,
+                )
+            elif parsed.path == "/v1/images/edits":
+                result = self.gateway.app.edit_image(
+                    self._incoming_headers(),
+                    body,
+                )
+            else:
+                result = self.gateway.app.responses(self._incoming_headers(), body)
             if isinstance(result, BufferedResponse):
                 self._send_buffered(result)
             else:

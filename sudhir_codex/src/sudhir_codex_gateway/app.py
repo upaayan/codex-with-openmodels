@@ -78,6 +78,14 @@ CHATGPT_REQUEST_HEADERS = {
     "x-oai-attestation",
     "x-openai-subagent",
 }
+CHATGPT_BUFFERED_RESPONSE_HEADERS = {
+    "cache-control",
+    "content-type",
+    "etag",
+    "openai-model",
+    "x-codex-turn-state",
+    "x-request-id",
+}
 
 
 @dataclass(frozen=True)
@@ -307,6 +315,114 @@ class GatewayApp:
             )
         self._require_known_gpt_model(model_id, incoming_headers)
         return self._gpt_response(request, incoming_headers, model_id)
+
+    def search(
+        self,
+        incoming_headers: dict[str, str],
+        body: bytes,
+    ) -> BufferedResponse:
+        return self._buffered_chatgpt_request(
+            incoming_headers,
+            body,
+            endpoint="alpha/search",
+            request_kind="Search",
+            provider_id="openai-codex-search",
+        )
+
+    def generate_image(
+        self,
+        incoming_headers: dict[str, str],
+        body: bytes,
+    ) -> BufferedResponse:
+        return self._image_request(incoming_headers, body, endpoint="generations")
+
+    def edit_image(
+        self,
+        incoming_headers: dict[str, str],
+        body: bytes,
+    ) -> BufferedResponse:
+        return self._image_request(incoming_headers, body, endpoint="edits")
+
+    def _image_request(
+        self,
+        incoming_headers: dict[str, str],
+        body: bytes,
+        *,
+        endpoint: str,
+    ) -> BufferedResponse:
+        return self._buffered_chatgpt_request(
+            incoming_headers,
+            body,
+            endpoint=f"images/{endpoint}",
+            request_kind="Image",
+            provider_id="openai-codex-image",
+        )
+
+    def _buffered_chatgpt_request(
+        self,
+        incoming_headers: dict[str, str],
+        body: bytes,
+        *,
+        endpoint: str,
+        request_kind: str,
+        provider_id: str,
+    ) -> BufferedResponse:
+        try:
+            request = json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise GatewayError(
+                400,
+                "invalid_json",
+                f"{request_kind} request body is not valid JSON",
+            ) from exc
+        if not isinstance(request, dict):
+            raise GatewayError(
+                400,
+                "invalid_request",
+                f"{request_kind} request must be an object",
+            )
+        model_id = request.get("model")
+        if not isinstance(model_id, str) or not model_id:
+            raise GatewayError(
+                400,
+                "model_missing",
+                f"{request_kind} request has no model",
+            )
+
+        target = f"{self.settings.chatgpt_base_url.rstrip('/')}/{endpoint}"
+        destination = urlparse(target).hostname or "chatgpt.com"
+        started = time.monotonic()
+        try:
+            upstream = self.client.post(
+                target,
+                headers=_chatgpt_headers(incoming_headers),
+                content=body,
+            )
+        except httpx.HTTPError as exc:
+            self._audit(model_id, provider_id, destination, 0, started)
+            raise GatewayError(
+                502,
+                f"chatgpt_{request_kind.lower()}_unreachable",
+                f"ChatGPT Codex {request_kind.lower()} backend could not be reached",
+            ) from exc
+        self._audit(model_id, provider_id, destination, upstream.status_code, started)
+        if upstream.is_redirect:
+            raise GatewayError(
+                502,
+                f"chatgpt_{request_kind.lower()}_redirect",
+                f"ChatGPT Codex {request_kind.lower()} backend attempted a redirect",
+            )
+        response_headers = {
+            name: value
+            for name, value in upstream.headers.items()
+            if name.lower() in CHATGPT_BUFFERED_RESPONSE_HEADERS
+        }
+        response_headers.setdefault("content-type", "application/json")
+        return BufferedResponse(
+            status=upstream.status_code,
+            headers=response_headers,
+            body=upstream.content,
+        )
 
     def catalog(self, *, refresh: bool = False) -> Catalog:
         with self._catalog_lock:
