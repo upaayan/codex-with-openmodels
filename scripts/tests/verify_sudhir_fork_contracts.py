@@ -16,6 +16,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONTRACTS = ROOT / "scripts" / "tests" / "sudhir_fork_contracts.toml"
 SOURCE_WORKFLOW = ROOT / ".github" / "workflows" / "source-ci.yml"
+RUST_WORKFLOW = ROOT / ".github" / "workflows" / "rust-focused.yml"
 NATIVE_WORKFLOW = ROOT / ".github" / "workflows" / "native-release.yml"
 
 EXPECTED_IDS = (
@@ -154,19 +155,29 @@ def lint(path: Path, platform: str | None) -> dict[str, Any]:
         _assert_test_resolves(row)
 
     source_workflow = SOURCE_WORKFLOW.read_text(encoding="utf-8")
+    rust_workflow = RUST_WORKFLOW.read_text(encoding="utf-8")
     native_workflow = NATIVE_WORKFLOW.read_text(encoding="utf-8")
-    required_commands = (
+    required_source_commands = (
         "python scripts/tests/verify_sudhir_fork_contracts.py lint --platform linux",
         "python scripts/tests/run_sudhir_fork_contracts.py --platform linux --phase prebuild",
+    )
+    required_rust_commands = (
         "just test -p codex-tui picker_searches_merged_model_names_and_providers",
         "just test -p codex-tui max_and_ultra_are_visible_and_keyboard_reachable",
         "just test -p codex-app-server active_selection_never_rewrites_new_task_defaults",
     )
-    for command in required_commands:
+    for command in required_source_commands:
         if source_workflow.count(command) != 1:
             raise ContractError(
                 f"source CI must contain exactly one command: {command}"
             )
+    for command in required_rust_commands:
+        if rust_workflow.count(command) != 1:
+            raise ContractError(
+                f"Rust CI must contain exactly one command: {command}"
+            )
+    if rust_workflow.count('- "codex-rs/**"') != 2:
+        raise ContractError("Rust CI must be path-gated to codex-rs changes")
     forbidden = {
         source_workflow: ("\n  gateway-windows:", "runs-on: windows-"),
         native_workflow: ("runs-on: windows-", "pc-windows-msvc", "windows-release-"),
