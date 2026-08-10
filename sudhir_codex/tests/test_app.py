@@ -646,6 +646,112 @@ class GatewayAppTests(unittest.TestCase):
         self.assertNotIn("chatgpt-secret", audit)
         self.assertNotIn("account-secret", audit)
 
+    def test_search_proxies_pi_model_through_chatgpt_auth(self) -> None:
+        observed: dict[str, object] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            observed["url"] = str(request.url)
+            observed["authorization"] = request.headers.get("authorization")
+            observed["account"] = request.headers.get("chatgpt-account-id")
+            observed["gateway"] = request.headers.get(GATEWAY_TOKEN_HEADER.lower())
+            observed["cookie"] = request.headers.get("cookie")
+            observed["body"] = json.loads(request.content)
+            return httpx.Response(
+                200,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Request-Id": "search-request-id",
+                },
+                json={"output": "Search result"},
+            )
+
+        app = GatewayApp(
+            self.settings,
+            http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        request_body = json.dumps(
+            {
+                "id": "search-session",
+                "model": "pi-deepseek/deepseek-v4-flash",
+                "commands": {"search_query": [{"q": "private-search-query"}]},
+            }
+        ).encode()
+        try:
+            response = app.search(
+                {
+                    "Authorization": "Bearer chatgpt-secret",
+                    "ChatGPT-Account-Id": "account-secret",
+                    GATEWAY_TOKEN_HEADER: "gateway-secret",
+                    "Cookie": "must-not-forward",
+                },
+                request_body,
+            )
+        finally:
+            app.close()
+
+        self.assertEqual(
+            observed["url"],
+            "https://chatgpt.test/backend-api/codex/alpha/search",
+        )
+        self.assertEqual(observed["authorization"], "Bearer chatgpt-secret")
+        self.assertEqual(observed["account"], "account-secret")
+        self.assertIsNone(observed["gateway"])
+        self.assertIsNone(observed["cookie"])
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.headers["x-request-id"], "search-request-id")
+
+        audit = self.settings.route_audit_path.read_text(encoding="utf-8")
+        self.assertIn('"provider_id":"openai-codex-search"', audit)
+        self.assertNotIn("private-search-query", audit)
+
+    def test_image_generation_proxies_through_chatgpt_auth(self) -> None:
+        observed: dict[str, object] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            observed["url"] = str(request.url)
+            observed["authorization"] = request.headers.get("authorization")
+            observed["gateway"] = request.headers.get(GATEWAY_TOKEN_HEADER.lower())
+            observed["body"] = json.loads(request.content)
+            return httpx.Response(
+                200,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Request-Id": "image-request-id",
+                },
+                json={"data": [{"b64_json": "image-data"}]},
+            )
+
+        app = GatewayApp(
+            self.settings,
+            http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        request_body = json.dumps(
+            {"model": "gpt-image-2", "prompt": "private-image-prompt"}
+        ).encode()
+        try:
+            response = app.generate_image(
+                {
+                    "Authorization": "Bearer chatgpt-secret",
+                    GATEWAY_TOKEN_HEADER: "gateway-secret",
+                },
+                request_body,
+            )
+        finally:
+            app.close()
+
+        self.assertEqual(
+            observed["url"],
+            "https://chatgpt.test/backend-api/codex/images/generations",
+        )
+        self.assertEqual(observed["authorization"], "Bearer chatgpt-secret")
+        self.assertIsNone(observed["gateway"])
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.headers["x-request-id"], "image-request-id")
+
+        audit = self.settings.route_audit_path.read_text(encoding="utf-8")
+        self.assertIn('"provider_id":"openai-codex-image"', audit)
+        self.assertNotIn("private-image-prompt", audit)
+
     def test_malformed_pi_catalog_cannot_block_gpt_requests(self) -> None:
         write_json(
             self.pi / "models.json",
