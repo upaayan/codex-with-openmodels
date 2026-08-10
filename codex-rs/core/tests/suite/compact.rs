@@ -101,7 +101,11 @@ fn ev_shell_command_call(call_id: &str, command: &str) -> serde_json::Value {
     )
 }
 
-fn disabled_permission_user_turn(text: impl Into<String>, cwd: PathBuf, model: String) -> Op {
+pub(super) fn disabled_permission_user_turn(
+    text: impl Into<String>,
+    cwd: PathBuf,
+    model: String,
+) -> Op {
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, cwd.as_path());
     Op::UserInput {
@@ -138,7 +142,7 @@ fn summary_with_prefix(summary: &str) -> String {
     format!("{SUMMARY_PREFIX}\n{summary}")
 }
 
-fn set_test_compact_prompt(config: &mut Config) {
+pub(super) fn set_test_compact_prompt(config: &mut Config) {
     config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
 }
 
@@ -266,7 +270,7 @@ with Path(r"{manual_post_log_path}").open("a", encoding="utf-8") as handle:
     fs::write(home.join("hooks.json"), hooks.to_string()).expect("write hooks.json");
 }
 
-fn non_openai_model_provider(server: &MockServer) -> ModelProviderInfo {
+pub(super) fn non_openai_model_provider(server: &MockServer) -> ModelProviderInfo {
     let mut provider =
         built_in_model_providers(/* openai_base_url */ /*openai_base_url*/ None)["openai"].clone();
     provider.name = "OpenAI (test)".into();
@@ -360,7 +364,7 @@ fn local_compaction_provider(server: &wiremock::MockServer) -> ModelProviderInfo
     provider
 }
 
-fn model_info_with_context_window(slug: &str, context_window: i64) -> ModelInfo {
+pub(super) fn model_info_with_context_window(slug: &str, context_window: i64) -> ModelInfo {
     let models_response = bundled_models_response().expect("bundled models.json should parse");
     let mut model_info = models_response
         .models
@@ -371,13 +375,13 @@ fn model_info_with_context_window(slug: &str, context_window: i64) -> ModelInfo 
     model_info
 }
 
-fn model_info_with_optional_comp_hash(slug: &str, comp_hash: Option<&str>) -> ModelInfo {
+pub(super) fn model_info_with_optional_comp_hash(slug: &str, comp_hash: Option<&str>) -> ModelInfo {
     let mut model_info = model_info_with_context_window(slug, /*context_window*/ 273_000);
     model_info.comp_hash = comp_hash.map(str::to_string);
     model_info
 }
 
-fn assert_pre_sampling_switch_compaction_requests(
+pub(super) fn assert_pre_sampling_switch_compaction_requests(
     first: &serde_json::Value,
     compact: &serde_json::Value,
     follow_up: &serde_json::Value,
@@ -404,7 +408,9 @@ fn assert_pre_sampling_switch_compaction_requests(
     );
 }
 
-async fn assert_compaction_uses_turn_lifecycle_id(codex: &std::sync::Arc<codex_core::CodexThread>) {
+pub(super) async fn assert_compaction_uses_turn_lifecycle_id(
+    codex: &std::sync::Arc<codex_core::CodexThread>,
+) {
     let mut turn_started_id = None;
     let mut turn_completed_id = None;
     let mut compact_started_id = None;

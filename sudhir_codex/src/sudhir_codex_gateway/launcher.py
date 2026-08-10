@@ -223,13 +223,14 @@ def _forced_config(gateway_url: str) -> list[str]:
         '{ name = "Sudhir Gateway", '
         f'base_url = "{gateway_url}/v1", '
         'wire_api = "responses", requires_openai_auth = true, '
-        "supports_websockets = false, "
+        "supports_websockets = false, supports_standalone_web_search = true, "
         'env_http_headers = { "'
         + GATEWAY_TOKEN_HEADER
         + '" = "SUDHIR_CODEX_GATEWAY_TOKEN" } }'
     )
     values = [
         'model_provider="sudhir_gateway"',
+        'web_search="live"',
         f"model_providers.sudhir_gateway={provider}",
         "analytics.enabled=false",
         "feedback.enabled=false",
@@ -240,6 +241,7 @@ def _forced_config(gateway_url: str) -> list[str]:
         "check_for_update_on_startup=false",
         'cli_auth_credentials_store="file"',
         "features.enable_request_compression=false",
+        "features.standalone_web_search=true",
         "agents.enabled=true",
         "agents.max_concurrent_threads_per_session=6",
         'features.multi_agent_v2.tool_namespace="sudhir_agents"',
