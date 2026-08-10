@@ -158,6 +158,9 @@ def lint(path: Path, platform: str | None) -> dict[str, Any]:
     required_commands = (
         "python scripts/tests/verify_sudhir_fork_contracts.py lint --platform linux",
         "python scripts/tests/run_sudhir_fork_contracts.py --platform linux --phase prebuild",
+        "just test -p codex-tui picker_searches_merged_model_names_and_providers",
+        "just test -p codex-tui max_and_ultra_are_visible_and_keyboard_reachable",
+        "just test -p codex-app-server active_selection_never_rewrites_new_task_defaults",
     )
     for command in required_commands:
         if source_workflow.count(command) != 1:

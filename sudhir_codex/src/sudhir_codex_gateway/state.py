@@ -279,6 +279,7 @@ def file_mode(path: Path) -> str | None:
 def _base_config(paths: RuntimePaths) -> str:
     return f"""# Private configuration for Sudhir-Codex. Do not symlink to ~/.codex.
 model_provider = "sudhir_gateway"
+web_search = "live"
 check_for_update_on_startup = false
 cli_auth_credentials_store = "file"
 
@@ -306,6 +307,7 @@ metrics_exporter = "none"
 
 [features]
 enable_request_compression = false
+standalone_web_search = true
 
 [model_providers.sudhir_gateway]
 name = "Sudhir Gateway"
@@ -313,6 +315,7 @@ base_url = "{paths.gateway_url}/v1"
 wire_api = "responses"
 requires_openai_auth = true
 supports_websockets = false
+supports_standalone_web_search = true
 
 [model_providers.sudhir_gateway.env_http_headers]
 "{GATEWAY_TOKEN_HEADER}" = "SUDHIR_CODEX_GATEWAY_TOKEN"
