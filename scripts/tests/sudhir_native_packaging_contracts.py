@@ -31,6 +31,7 @@ class NativePackagingContracts(unittest.TestCase):
             "MODIFICATIONS.md",
             ".github/upstream-base.txt",
             ".github/workflows/source-ci.yml",
+            ".github/workflows/rust-focused.yml",
             ".github/workflows/native-release.yml",
             ".github/workflows/monthly-upstream-check.yml",
         )
@@ -38,7 +39,12 @@ class NativePackagingContracts(unittest.TestCase):
         workflows = sorted((ROOT / ".github" / "workflows").glob("*.y*ml"))
         self.assertEqual(
             [path.name for path in workflows],
-            ["monthly-upstream-check.yml", "native-release.yml", "source-ci.yml"],
+            [
+                "monthly-upstream-check.yml",
+                "native-release.yml",
+                "rust-focused.yml",
+                "source-ci.yml",
+            ],
         )
         tracked = subprocess.run(
             ["git", "ls-files"],
