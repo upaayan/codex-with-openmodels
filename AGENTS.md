@@ -1,3 +1,38 @@
+# Sudhir-Codex Computer Use
+
+When a task requires Computer Use, use the installed `computer-use:computer-use`
+skill and follow its bootstrap instructions. The model must not choose or infer a
+native helper path itself.
+
+1. Read the installed Computer Use `SKILL.md` completely.
+2. Derive the plugin root from that skill's path and load its
+   `scripts/computer-use-client.mjs` wrapper in `node_repl`:
+
+   ```js
+   if (!globalThis.sky) {
+     const { setupComputerUseRuntime } = await import(
+       "<plugin root>/scripts/computer-use-client.mjs"
+     );
+     await setupComputerUseRuntime({ globals: globalThis });
+   }
+   ```
+
+3. Use the resulting `sky` API, such as `await sky.list_apps()` or
+   `await sky.get_app_state(...)`.
+
+Do not import `@oai/sky` directly, invoke the generic Computer Use MCP launcher,
+or substitute `~/.codex` paths. Sudhir-Codex owns the runtime configuration and
+must supply `CODEX_HOME=~/.sudhir-codex`, `SKY_CUA_SERVICE_PATH`, and
+`SKY_CUA_SERVICE_NATIVE_PIPE_PATH` to the trusted `node_repl` runtime.
+
+The model-visible `nodeRepl.env` object may be empty, frozen, or otherwise
+restricted. Do not treat that view as proof that the actual `node_repl` process
+lacks its configured environment, and do not try to mutate it. If the wrapper
+fails, report the exact wrapper or transport error. Before concluding that the
+helper is missing or installed under the wrong namespace, verify the configured
+`[mcp_servers.node_repl.env]` values and the actual `node_repl` process environment
+with read-only checks.
+
 # Rust/codex-rs
 
 ## Sudhir-Codex owner testing override

@@ -646,6 +646,88 @@ class GatewayAppTests(unittest.TestCase):
         self.assertNotIn("chatgpt-secret", audit)
         self.assertNotIn("account-secret", audit)
 
+    def test_gpt_request_omits_foreign_plaintext_reasoning(self) -> None:
+        observed: dict[str, object] = {}
+        openai_reasoning = {
+            "type": "reasoning",
+            "id": "rs_openai",
+            "summary": [],
+            "encrypted_content": "opaque-openai-reasoning",
+        }
+        assistant_message = {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "DeepSeek replied"}],
+        }
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "GET":
+                return httpx.Response(
+                    200,
+                    json={
+                        "models": [
+                            {
+                                "slug": "gpt-test",
+                                "display_name": "GPT Test",
+                                "visibility": "list",
+                            }
+                        ]
+                    },
+                )
+            observed["body"] = json.loads(request.content)
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "text/event-stream"},
+                content=(
+                    b"event: response.completed\n"
+                    b'data: {"type":"response.completed"}\n\n'
+                ),
+            )
+
+        app = GatewayApp(
+            self.settings,
+            http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        response: StreamingResponse | None = None
+        try:
+            result = app.responses(
+                {"Authorization": "Bearer chatgpt-secret"},
+                json.dumps(
+                    {
+                        "model": "gpt-test",
+                        "input": [
+                            openai_reasoning,
+                            {
+                                "type": "reasoning",
+                                "id": "foreign-reasoning",
+                                "summary": [],
+                                "content": [
+                                    {
+                                        "type": "reasoning_text",
+                                        "text": "DeepSeek private reasoning",
+                                    }
+                                ],
+                                "encrypted_content": None,
+                            },
+                            assistant_message,
+                        ],
+                        "stream": True,
+                    }
+                ).encode(),
+            )
+            self.assertIsInstance(result, StreamingResponse)
+            response = result
+            self.assertEqual(b"".join(response.response.iter_bytes())[:6], b"event:")
+        finally:
+            if response is not None:
+                response.response.close()
+            app.close()
+
+        self.assertEqual(
+            observed["body"]["input"],  # type: ignore[index]
+            [openai_reasoning, assistant_message],
+        )
+
     def test_search_proxies_pi_model_through_chatgpt_auth(self) -> None:
         observed: dict[str, object] = {}
 

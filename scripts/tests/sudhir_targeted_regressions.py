@@ -39,6 +39,7 @@ GATEWAY_TESTS = (
     "test_credentials.CredentialTests.test_arbitrary_oauth_provider_delegates_to_pi_without_allowlist",
     "test_app.GatewayAppTests.test_xai_grok45_uses_responses_transport",
     "test_app.GatewayAppTests.test_pi_provider_error_preserves_status_body_and_request_id",
+    "test_app.GatewayAppTests.test_gpt_request_omits_foreign_plaintext_reasoning",
 )
 RUST_TESTS = (
     "pre_sampling_compact_uses_selected_model_on_switch_to_smaller_context_model",

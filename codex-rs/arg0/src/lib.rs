@@ -34,6 +34,10 @@ pub struct Arg0DispatchPaths {
     pub main_execve_wrapper_exe: Option<PathBuf>,
 }
 
+#[cfg(test)]
+#[path = "sudhir_arg0_contracts_tests.rs"]
+mod sudhir_arg0_contracts_tests;
+
 /// Keeps the per-session PATH entry alive and locked for the process lifetime.
 pub struct Arg0PathEntryGuard {
     _temp_dir: TempDir,
