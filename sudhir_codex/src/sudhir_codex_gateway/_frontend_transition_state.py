@@ -142,6 +142,35 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _config_semantic_sha256(path: Path) -> str:
+    config = tomllib.loads(path.read_text(encoding="utf-8"))
+    marketplaces = config.get("marketplaces")
+    if isinstance(marketplaces, dict):
+        for marketplace in marketplaces.values():
+            if isinstance(marketplace, dict):
+                marketplace.pop("last_updated", None)
+    payload = json.dumps(
+        config,
+        default=str,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def primary_config_matches(
+    paths: TransitionPaths,
+    metadata: dict[str, Any],
+) -> bool:
+    primary_config = Path(str(metadata["primaryState"])) / "config.toml"
+    expected_semantic = metadata.get("primaryConfigSemanticSha256")
+    if not isinstance(expected_semantic, str) and paths.baseline_config.is_file():
+        expected_semantic = _config_semantic_sha256(paths.baseline_config)
+    if isinstance(expected_semantic, str):
+        return _config_semantic_sha256(primary_config) == expected_semantic
+    return _sha256(primary_config) == metadata.get("primaryConfigSha256")
+
+
 def _read_app_identity(app: Path) -> tuple[str, str, str]:
     plist_path = app / "Contents" / "Info.plist"
     if not plist_path.is_file():
@@ -409,6 +438,7 @@ def prepare(paths: TransitionPaths) -> dict[str, Any]:
             "officialBuild": build,
             "browserClientSha256": browser_hash,
             "primaryConfigSha256": primary_config_hash,
+            "primaryConfigSemanticSha256": _config_semantic_sha256(primary_config),
             "deployedCoreSha256": core_hash,
             "chromeManifest": str(paths.chrome_manifest),
             "chromeManifestPresent": chrome_bytes is not None,

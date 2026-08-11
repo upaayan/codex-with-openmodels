@@ -178,6 +178,7 @@ CODEX_CLI_PATH = "{self.launcher}"
         self.assertTrue((self.transition / TRANSITION_METADATA).is_file())
         self.assertTrue(self.profile.is_dir())
         self.assertEqual(metadata["primaryConfigSha256"], primary_hash)
+        self.assertRegex(metadata["primaryConfigSemanticSha256"], r"^[0-9a-f]{64}$")
         wrapper = (self.transition / "bin" / "sudhir-codex-chatgpt").read_text()
         self.assertIn(f"SUDHIR_CODEX_STATE={json.dumps(str(self.transition))}", wrapper)
         self.assertIn(
@@ -231,6 +232,42 @@ CODEX_CLI_PATH = "{self.launcher}"
             hashlib.sha256((self.primary / "config.toml").read_bytes()).hexdigest(),
             primary_hash,
         )
+
+    def test_rollback_allows_only_volatile_marketplace_timestamp_change(self) -> None:
+        primary_config = self.primary / "config.toml"
+        primary_config.write_text(
+            primary_config.read_text()
+            + "\n"
+            + '[marketplaces."openai-bundled"]\n'
+            + 'last_updated = "old"\n'
+        )
+        self.transition.mkdir()
+        self.profile.mkdir()
+        (self.transition / "frontend-transition-backups").mkdir()
+        baseline = self.transition / BASELINE_CONFIG
+        baseline.write_bytes(primary_config.read_bytes())
+        primary_hash = hashlib.sha256(primary_config.read_bytes()).hexdigest()
+        metadata = {
+            "primaryState": str(self.primary),
+            "primaryConfigSha256": primary_hash,
+            "chromeManifestPresent": False,
+        }
+        (self.transition / TRANSITION_METADATA).write_text(json.dumps(metadata))
+        primary_config.write_text(
+            primary_config.read_text().replace(
+                'last_updated = "old"',
+                'last_updated = "new"',
+            )
+        )
+
+        with mock.patch(
+            "sudhir_codex_gateway.frontend_transition.transition_processes",
+            return_value=[],
+        ):
+            destination = rollback(self.paths)
+
+        self.assertTrue((destination / self.transition.name).is_dir())
+        self.assertTrue(primary_config.is_file())
 
     def test_rollback_fails_before_moving_state_when_primary_changed(self) -> None:
         self.transition.mkdir()
