@@ -33,6 +33,7 @@ use codex_app_server_protocol::NetworkUnixSocketPermission;
 use codex_app_server_protocol::NewThreadModelDefaults;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::WindowsSandboxSetupMode;
+use codex_app_server_protocol::WriteStatus;
 use codex_config::ConfigRequirementsToml;
 use codex_config::HookEventsToml;
 use codex_config::HookHandlerConfig as CoreHookHandlerConfig;
@@ -137,6 +138,11 @@ impl ConfigRequestProcessor {
         &self,
         mut params: ConfigBatchWriteParams,
     ) -> Result<ClientResponsePayload, JSONRPCErrorError> {
+        let model_picker_only = !params.edits.is_empty()
+            && params
+                .edits
+                .iter()
+                .all(|edit| matches!(edit.key_path.as_str(), "model" | "model_reasoning_effort"));
         let session_defaults_only = !params.edits.is_empty()
             && params.edits.iter().all(|edit| {
                 matches!(
@@ -156,7 +162,12 @@ impl ConfigRequestProcessor {
             .edits
             .retain(|edit| !matches!(edit.key_path.as_str(), "model" | "model_reasoning_effort"));
         let reload_user_config = params.reload_user_config;
-        let response = self.batch_write_inner(params).await?;
+        let mut response = self.batch_write_inner(params).await?;
+        if model_picker_only {
+            // The stock desktop keeps this selection in the new-thread draft
+            // when the ignored default write is reported as overridden.
+            response.status = WriteStatus::OkOverridden;
+        }
         if !session_defaults_only {
             self.handle_config_mutation().await;
             if reload_user_config {

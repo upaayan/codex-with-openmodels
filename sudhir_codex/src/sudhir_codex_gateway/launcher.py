@@ -11,7 +11,11 @@ from .management import main as management_main
 from .management import runtime_paths_from_env
 from .management import start_gateway
 from .platform_support import is_windows
+from .state import RuntimePaths
 from .state import ensure_private_state
+
+GATEWAY_STATE_ENV = "SUDHIR_CODEX_GATEWAY_STATE"
+
 
 CRITICAL_CONFIG_PREFIXES = (
     "agents",
@@ -33,6 +37,9 @@ def main(argv: list[str] | None = None) -> int:
     paths = runtime_paths_from_env()
     try:
         token = ensure_private_state(paths)
+        gateway_paths = _gateway_paths_from_env(paths)
+        if gateway_paths != paths:
+            token = ensure_private_state(gateway_paths)
         management = _management_command(argv)
         if management is not None:
             return management_main(management)
@@ -43,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
                 "core_binary_missing",
                 f"Fork core is missing at {paths.core_binary}; run the installer",
             )
-        start_gateway(paths)
+        start_gateway(gateway_paths)
         environment = os.environ.copy()
         environment.update(
             {
@@ -55,7 +62,7 @@ def main(argv: list[str] | None = None) -> int:
                 "SUDHIR_CODEX_LAUNCHER": "1",
             }
         )
-        forced = _forced_config(paths.gateway_url)
+        forced = _forced_config(gateway_paths.gateway_url)
         if is_windows():
             environment.setdefault(
                 "HOME",
@@ -83,6 +90,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"sudhir-codex: {exc.message}", file=sys.stderr)
         return exc.status if 1 <= exc.status <= 125 else 1
     return 1
+
+
+def _gateway_paths_from_env(paths: RuntimePaths) -> RuntimePaths:
+    raw_state = os.environ.get(GATEWAY_STATE_ENV)
+    if raw_state is None or not raw_state.strip():
+        return paths
+    return RuntimePaths(
+        repo_root=paths.repo_root,
+        state_dir=Path(raw_state).expanduser(),
+        pi_agent_dir=paths.pi_agent_dir,
+        official_codex_home_override=paths.official_codex_home_override,
+    )
 
 
 def _management_command(argv: list[str]) -> list[str] | None:
