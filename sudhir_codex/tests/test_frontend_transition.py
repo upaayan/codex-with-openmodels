@@ -14,6 +14,7 @@ from sudhir_codex_gateway._frontend_transition_state import TransitionPaths
 from sudhir_codex_gateway._frontend_transition_state import prepare
 from sudhir_codex_gateway._frontend_transition_state import restore_chrome
 from sudhir_codex_gateway._frontend_transition_state import rewrite_transition_config
+from sudhir_codex_gateway.frontend_transition import launch
 from sudhir_codex_gateway.frontend_transition import rollback
 
 
@@ -192,6 +193,46 @@ CODEX_CLI_PATH = "{self.launcher}"
             ).read_bytes(),
             self.chrome_manifest.read_bytes(),
         )
+
+    def test_launch_pins_official_computer_use_environment(self) -> None:
+        self.transition.mkdir()
+        self.profile.mkdir()
+        (self.transition / "bin").mkdir()
+        wrapper = self.transition / "bin" / "sudhir-codex-chatgpt"
+        wrapper.write_text("#!/bin/sh\n")
+        wrapper.chmod(0o755)
+        (self.transition / "config.toml").write_text(
+            "[mcp_servers.node_repl.env]\n"
+            f'SKY_CUA_SERVICE_PATH = "{self.primary}/control/Sudhir Computer Use.app"\n'
+            f'SKY_CUA_SERVICE_NATIVE_PIPE_PATH = "{self.primary}/control/run/computer-use.sock"\n'
+        )
+        (self.transition / TRANSITION_METADATA).write_text(
+            json.dumps({"browserClientSha256": "official-browser-hash"})
+        )
+
+        with mock.patch(
+            "sudhir_codex_gateway.frontend_transition.subprocess.run"
+        ) as run:
+            launch(self.paths)
+
+        command = run.call_args.args[0]
+        self.assertIn(
+            f"SKY_CUA_SERVICE_PATH={self.transition}/computer-use/Codex Computer Use.app",
+            command,
+        )
+        self.assertIn("SKY_CUA_SERVICE_NATIVE_PIPE_PATH=", command)
+        self.assertIn("SUDHIR_CUA=0", command)
+        self.assertIn(
+            "SUDHIR_BROWSER_CLIENT_SHA256S=official-browser-hash",
+            command,
+        )
+        repaired = (self.transition / "config.toml").read_text()
+        self.assertIn(
+            f'SKY_CUA_SERVICE_PATH = "{self.transition}/computer-use/Codex Computer Use.app"',
+            repaired,
+        )
+        self.assertNotIn("SKY_CUA_SERVICE_NATIVE_PIPE_PATH", repaired)
+        self.assertNotIn("Sudhir Computer Use.app", repaired)
 
     def test_chrome_restore_and_rollback_archive_without_touching_primary(self) -> None:
         self.transition.mkdir()
