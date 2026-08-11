@@ -173,9 +173,7 @@ def lint(path: Path, platform: str | None) -> dict[str, Any]:
             )
     for command in required_rust_commands:
         if rust_workflow.count(command) != 1:
-            raise ContractError(
-                f"Rust CI must contain exactly one command: {command}"
-            )
+            raise ContractError(f"Rust CI must contain exactly one command: {command}")
     if rust_workflow.count('- "codex-rs/**"') != 2:
         raise ContractError("Rust CI must be path-gated to codex-rs changes")
     forbidden = {
