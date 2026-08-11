@@ -7,7 +7,9 @@ from unittest import mock
 
 from sudhir_codex_gateway.app import GATEWAY_TOKEN_HEADER
 from sudhir_codex_gateway.errors import GatewayError
+from sudhir_codex_gateway.launcher import GATEWAY_STATE_ENV
 from sudhir_codex_gateway.launcher import _forced_config
+from sudhir_codex_gateway.launcher import _gateway_paths_from_env
 from sudhir_codex_gateway.launcher import _reject_critical_overrides
 from sudhir_codex_gateway.launcher import main as launcher_main
 from sudhir_codex_gateway.management import start_gateway
@@ -303,6 +305,23 @@ X-Test = "value"
             with self.subTest(override=override):
                 with self.assertRaises(GatewayError):
                     _reject_critical_overrides([*invocation[:-2], "-c", override])
+
+    def test_frontend_state_can_reuse_the_primary_gateway_state(self) -> None:
+        gateway_state = self.root / "primary-gateway-state"
+        with mock.patch.dict(
+            os.environ,
+            {GATEWAY_STATE_ENV: str(gateway_state)},
+            clear=False,
+        ):
+            gateway_paths = _gateway_paths_from_env(self.paths)
+
+        self.assertEqual(gateway_paths.repo_root, self.paths.repo_root)
+        self.assertEqual(gateway_paths.state_dir, gateway_state)
+        self.assertEqual(gateway_paths.pi_agent_dir, self.paths.pi_agent_dir)
+        self.assertEqual(
+            gateway_paths.official_codex_home_override,
+            self.paths.official_codex_home_override,
+        )
 
     def test_forced_config_pins_gateway_and_telemetry_off(self) -> None:
         argv = _forced_config("http://127.0.0.1:32179")

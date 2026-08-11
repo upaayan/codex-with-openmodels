@@ -29,7 +29,30 @@ model_reasoning_effort = "high"
         .build_initialized_with_timeout(READ_TIMEOUT)
         .await?;
 
-    let request_id = app
+    let picker_request_id = app
+        .send_config_batch_write_request(ConfigBatchWriteParams {
+            file_path: None,
+            edits: vec![
+                ConfigEdit {
+                    key_path: "model".to_string(),
+                    value: json!("pi-deepseek/v4-flash"),
+                    merge_strategy: MergeStrategy::Replace,
+                },
+                ConfigEdit {
+                    key_path: "model_reasoning_effort".to_string(),
+                    value: json!("ultra"),
+                    merge_strategy: MergeStrategy::Replace,
+                },
+            ],
+            expected_version: None,
+            reload_user_config: false,
+        })
+        .await?;
+    let picker_response: ConfigWriteResponse =
+        timeout(READ_TIMEOUT, app.read_response(picker_request_id)).await??;
+    assert_eq!(picker_response.status, WriteStatus::OkOverridden);
+
+    let mixed_request_id = app
         .send_config_batch_write_request(ConfigBatchWriteParams {
             file_path: None,
             edits: vec![
@@ -53,9 +76,9 @@ model_reasoning_effort = "high"
             reload_user_config: false,
         })
         .await?;
-    let response: ConfigWriteResponse =
-        timeout(READ_TIMEOUT, app.read_response(request_id)).await??;
-    assert_eq!(response.status, WriteStatus::Ok);
+    let mixed_response: ConfigWriteResponse =
+        timeout(READ_TIMEOUT, app.read_response(mixed_request_id)).await??;
+    assert_eq!(mixed_response.status, WriteStatus::Ok);
 
     let config: toml::Value =
         toml::from_str(&std::fs::read_to_string(codex_home.join("config.toml"))?)?;
