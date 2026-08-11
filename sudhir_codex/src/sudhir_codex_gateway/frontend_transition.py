@@ -6,8 +6,10 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -16,13 +18,37 @@ from ._frontend_transition_state import TransitionPaths
 from ._frontend_transition_state import _config_semantic_sha256
 from ._frontend_transition_state import _load_metadata
 from ._frontend_transition_state import _sha256
+from ._frontend_transition_state import _write_atomic
 from ._frontend_transition_state import prepare
 from ._frontend_transition_state import primary_config_matches
 from ._frontend_transition_state import restore_chrome
 
 
+def _repair_transition_computer_use_config(paths: TransitionPaths) -> None:
+    text = paths.config.read_text(encoding="utf-8")
+    service = paths.state / "computer-use" / "Codex Computer Use.app"
+    updated, service_count = re.subn(
+        r'^SKY_CUA_SERVICE_PATH = ".*"$',
+        f'SKY_CUA_SERVICE_PATH = "{service}"',
+        text,
+        flags=re.MULTILINE,
+    )
+    if service_count < 1:
+        raise TransitionError("Transition config has no Computer Use service path")
+    updated = re.sub(
+        r'^SKY_CUA_SERVICE_NATIVE_PIPE_PATH = ".*"\n?',
+        "",
+        updated,
+        flags=re.MULTILINE,
+    )
+    tomllib.loads(updated)
+    if updated != text:
+        _write_atomic(paths.config, updated.encode("utf-8"), mode=0o600)
+
+
 def launch(paths: TransitionPaths) -> None:
-    _load_metadata(paths)
+    metadata = _load_metadata(paths)
+    _repair_transition_computer_use_config(paths)
     if not paths.wrapper.is_file() or not os.access(paths.wrapper, os.X_OK):
         raise TransitionError(f"Transition launcher is missing: {paths.wrapper}")
     if not paths.profile.is_dir():
@@ -50,6 +76,14 @@ def launch(paths: TransitionPaths) -> None:
         f"SUDHIR_CODEX_PI_AGENT_DIR={paths.pi_agent_dir}",
         "--env",
         "CODEX_APP_SERVER_FORCE_CLI=1",
+        "--env",
+        f"SKY_CUA_SERVICE_PATH={paths.state / 'computer-use' / 'Codex Computer Use.app'}",
+        "--env",
+        "SKY_CUA_SERVICE_NATIVE_PIPE_PATH=",
+        "--env",
+        "SUDHIR_CUA=0",
+        "--env",
+        f"SUDHIR_BROWSER_CLIENT_SHA256S={metadata['browserClientSha256']}",
         "--env",
         f"CODEX_ELECTRON_USER_DATA_PATH={paths.profile}",
         "--args",
