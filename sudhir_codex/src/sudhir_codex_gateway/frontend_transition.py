@@ -13,9 +13,11 @@ from typing import Any
 
 from ._frontend_transition_state import TransitionError
 from ._frontend_transition_state import TransitionPaths
+from ._frontend_transition_state import _config_semantic_sha256
 from ._frontend_transition_state import _load_metadata
 from ._frontend_transition_state import _sha256
 from ._frontend_transition_state import prepare
+from ._frontend_transition_state import primary_config_matches
 from ._frontend_transition_state import restore_chrome
 
 
@@ -103,8 +105,9 @@ def status(paths: TransitionPaths) -> dict[str, Any]:
         "prepared": True,
         "running": bool(main_pids),
         "appServerRunning": app_server_running,
-        "primaryConfigUnchanged": primary_hash == metadata.get("primaryConfigSha256"),
+        "primaryConfigUnchanged": primary_config_matches(paths, metadata),
         "primaryConfigSha256": primary_hash,
+        "primaryConfigSemanticSha256": _config_semantic_sha256(primary_config),
         "transitionConfigSha256": transition_hash,
         "baselineConfigSha256": baseline_hash,
         "chromeManifestSha256": chrome_hash,
@@ -121,8 +124,7 @@ def rollback(paths: TransitionPaths) -> Path:
             "Quit only the transition ChatGPT instance before rollback"
         )
     metadata = _load_metadata(paths)
-    primary_config = Path(str(metadata["primaryState"])) / "config.toml"
-    if _sha256(primary_config) != metadata.get("primaryConfigSha256"):
+    if not primary_config_matches(paths, metadata):
         raise TransitionError(
             "Primary config no longer matches the recorded transition baseline"
         )
