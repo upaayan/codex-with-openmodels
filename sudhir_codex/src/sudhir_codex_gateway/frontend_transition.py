@@ -6,12 +6,16 @@ import argparse
 import datetime as dt
 import json
 import os
-import re
 import subprocess
 import sys
-import tomllib
+import time
 from pathlib import Path
 from typing import Any
+
+from ._frontend_transition_control import ControlRuntimeError
+from ._frontend_transition_control import apply_control_config
+from ._frontend_transition_control import provision_control_runtime
+from ._frontend_transition_control import runtime_status
 
 from ._frontend_transition_state import TransitionError
 from ._frontend_transition_state import TransitionPaths
@@ -19,36 +23,51 @@ from ._frontend_transition_state import _config_semantic_sha256
 from ._frontend_transition_state import _load_metadata
 from ._frontend_transition_state import _sha256
 from ._frontend_transition_state import _write_atomic
+from ._frontend_transition_state import _verify_official_resources
 from ._frontend_transition_state import prepare
 from ._frontend_transition_state import primary_config_matches
 from ._frontend_transition_state import restore_chrome
 
 
-def _repair_transition_computer_use_config(paths: TransitionPaths) -> None:
-    text = paths.config.read_text(encoding="utf-8")
-    service = paths.state / "computer-use" / "Codex Computer Use.app"
-    updated, service_count = re.subn(
-        r'^SKY_CUA_SERVICE_PATH = ".*"$',
-        f'SKY_CUA_SERVICE_PATH = "{service}"',
-        text,
-        flags=re.MULTILINE,
+def sync_control_runtime(paths: TransitionPaths) -> dict[str, Any]:
+    """Refresh official app metadata and the isolated Computer Use runtime."""
+
+    metadata = _load_metadata(paths)
+    _identifier, version, build, browser_hash = _verify_official_resources(paths)
+    control_metadata = provision_control_runtime(
+        paths.control_runtime,
+        paths.state,
     )
-    if service_count < 1:
-        raise TransitionError("Transition config has no Computer Use service path")
-    updated = re.sub(
-        r'^SKY_CUA_SERVICE_NATIVE_PIPE_PATH = ".*"\n?',
-        "",
-        updated,
-        flags=re.MULTILINE,
+    source = paths.config.read_text(encoding="utf-8")
+    updated = apply_control_config(
+        source,
+        paths.control_runtime,
+        official_version=version,
+        browser_client_hash=browser_hash,
     )
-    tomllib.loads(updated)
-    if updated != text:
+    if updated != source:
         _write_atomic(paths.config, updated.encode("utf-8"), mode=0o600)
+    metadata.update(control_metadata)
+    metadata.update(
+        {
+            "officialVersion": version,
+            "officialBuild": build,
+            "browserClientSha256": browser_hash,
+            "controlSyncedAt": dt.datetime.now(dt.UTC).isoformat(),
+        }
+    )
+    _write_atomic(
+        paths.metadata,
+        (json.dumps(metadata, indent=2, sort_keys=True) + "\n").encode("utf-8"),
+        mode=0o600,
+    )
+    return control_metadata
 
 
 def launch(paths: TransitionPaths) -> None:
+    sync_control_runtime(paths)
     metadata = _load_metadata(paths)
-    _repair_transition_computer_use_config(paths)
+    control = paths.control_runtime
     if not paths.wrapper.is_file() or not os.access(paths.wrapper, os.X_OK):
         raise TransitionError(f"Transition launcher is missing: {paths.wrapper}")
     if not paths.profile.is_dir():
@@ -77,7 +96,11 @@ def launch(paths: TransitionPaths) -> None:
         "--env",
         "CODEX_APP_SERVER_FORCE_CLI=1",
         "--env",
-        f"SKY_CUA_SERVICE_PATH={paths.state / 'computer-use' / 'Codex Computer Use.app'}",
+        f"CODEX_NODE_REPL_PATH={control.node_repl}",
+        "--env",
+        f"CODEX_BROWSER_USE_NODE_PATH={control.node}",
+        "--env",
+        "SKY_CUA_SERVICE_PATH=",
         "--env",
         "SKY_CUA_SERVICE_NATIVE_PIPE_PATH=",
         "--env",
@@ -90,6 +113,10 @@ def launch(paths: TransitionPaths) -> None:
         f"--user-data-dir={paths.profile}",
     ]
     subprocess.run(command, check=True)
+    if _wait_for_app_server(paths, timeout_seconds=20):
+        # The app may install a newer bundled Computer Use plugin during startup.
+        time.sleep(1.5)
+        sync_control_runtime(paths)
 
 
 def _process_rows() -> list[tuple[int, int, str]]:
@@ -114,6 +141,32 @@ def _process_rows() -> list[tuple[int, int, str]]:
 def transition_processes(paths: TransitionPaths) -> list[tuple[int, int, str]]:
     marker = f"--user-data-dir={paths.profile}"
     return [row for row in _process_rows() if marker in row[2]]
+
+
+
+def _wait_for_app_server(
+    paths: TransitionPaths,
+    *,
+    timeout_seconds: float,
+) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    main_executable = str(paths.official_app / "Contents" / "MacOS" / "ChatGPT")
+    while time.monotonic() < deadline:
+        transition = transition_processes(paths)
+        main_pids = {
+            pid
+            for pid, _ppid, command in transition
+            if main_executable in command
+        }
+        if main_pids and any(
+            ppid in main_pids
+            and "sudhir-codex-core" in command
+            and "app-server" in command
+            for _pid, ppid, command in _process_rows()
+        ):
+            return True
+        time.sleep(0.25)
+    return False
 
 
 def status(paths: TransitionPaths) -> dict[str, Any]:
@@ -149,6 +202,7 @@ def status(paths: TransitionPaths) -> dict[str, Any]:
         == metadata.get("chromeManifestSha256"),
         "transitionState": str(paths.state),
         "transitionProfile": str(paths.profile),
+        "controlRuntime": runtime_status(paths.control_runtime),
     }
 
 
@@ -189,7 +243,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "command",
-        choices=("prepare", "launch", "status", "restore-chrome", "rollback"),
+        choices=(
+            "prepare",
+            "sync-control-runtime",
+            "launch",
+            "status",
+            "restore-chrome",
+            "rollback",
+        ),
     )
     return parser
 
@@ -200,6 +261,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "prepare":
             print(json.dumps(prepare(paths), indent=2, sort_keys=True))
+        elif args.command == "sync-control-runtime":
+            print(json.dumps(sync_control_runtime(paths), indent=2, sort_keys=True))
         elif args.command == "launch":
             launch(paths)
             print(f"Launched ChatGPT with transition profile {paths.profile}")
@@ -210,7 +273,13 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Restored Chrome native host {paths.chrome_manifest}")
         elif args.command == "rollback":
             print(f"Transition archived at {rollback(paths)}")
-    except (OSError, subprocess.SubprocessError, TransitionError, ValueError) as exc:
+    except (
+        ControlRuntimeError,
+        OSError,
+        subprocess.SubprocessError,
+        TransitionError,
+        ValueError,
+    ) as exc:
         print(f"gpt-pro-frontend-transition: {exc}", file=sys.stderr)
         return 1
     return 0

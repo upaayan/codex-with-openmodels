@@ -7,7 +7,6 @@ import hashlib
 import json
 import os
 import plistlib
-import re
 import shutil
 import subprocess
 import tempfile
@@ -15,6 +14,10 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from ._frontend_transition_control import ControlRuntimePaths
+from ._frontend_transition_control import apply_control_config
+from ._frontend_transition_control import provision_control_runtime
 
 TRANSITION_METADATA = "gpt-pro-frontend-transition.json"
 BASELINE_CONFIG = "config.toml.sudhir-baseline"
@@ -35,6 +38,7 @@ class TransitionPaths:
     official_app: Path
     chrome_manifest: Path
     pi_agent_dir: Path
+    legacy_cua_source: Path
 
     @classmethod
     def from_env(cls) -> TransitionPaths:
@@ -95,6 +99,12 @@ class TransitionPaths:
                     str(home / ".pi" / "agent"),
                 )
             ).expanduser(),
+            legacy_cua_source=Path(
+                os.environ.get(
+                    "SUDHIR_CODEX_LEGACY_CUA_SOURCE",
+                    "/Applications/Sudhir-Codex.app/Contents/Resources/cua_node",
+                )
+            ).expanduser(),
         )
 
     @property
@@ -132,6 +142,16 @@ class TransitionPaths:
     @property
     def rollback_root(self) -> Path:
         return self.repo_root / "dist" / "backups"
+
+
+    @property
+    def control_runtime(self) -> ControlRuntimePaths:
+        return ControlRuntimePaths(
+            transition_state=self.state,
+            primary_state=self.primary_state,
+            official_app=self.official_app,
+            legacy_source=self.legacy_cua_source,
+        )
 
 
 def _sha256(path: Path) -> str:
@@ -233,20 +253,6 @@ def _verify_official_resources(paths: TransitionPaths) -> tuple[str, str, str, s
     return identifier, version, build, browser_hash
 
 
-def _replace_one(pattern: str, replacement: str, text: str, label: str) -> str:
-    updated, count = re.subn(pattern, replacement, text, flags=re.MULTILINE)
-    if count != 1:
-        raise TransitionError(f"Expected one {label} setting, found {count}")
-    return updated
-
-
-def _replace_all(pattern: str, replacement: str, text: str, label: str) -> str:
-    updated, count = re.subn(pattern, replacement, text, flags=re.MULTILINE)
-    if count < 1:
-        raise TransitionError(f"Expected at least one {label} setting")
-    return updated
-
-
 def rewrite_transition_config(
     source: str,
     *,
@@ -255,49 +261,23 @@ def rewrite_transition_config(
     official_app: Path,
     official_version: str,
     browser_client_hash: str,
+    legacy_cua_source: Path,
 ) -> str:
-    """Convert the cloned Sudhir frontend config to official ChatGPT resources."""
+    """Convert cloned Sudhir frontend config to standard ChatGPT resources."""
 
     text = source.replace(str(primary_state), str(transition_state))
     text = text.replace("/Applications/Sudhir-Codex.app", str(official_app))
-    node_modules = (
-        official_app / "Contents" / "Resources" / "cua_node" / "lib" / "node_modules"
-    )
-    service = transition_state / "computer-use" / "Codex Computer Use.app"
-    text = _replace_all(
-        r'^NODE_REPL_TRUSTED_CODE_PATHS = ".*"$',
-        f'NODE_REPL_TRUSTED_CODE_PATHS = "{transition_state}:{node_modules}"',
+    text = apply_control_config(
         text,
-        "trusted-code paths",
+        ControlRuntimePaths(
+            transition_state=transition_state,
+            primary_state=primary_state,
+            official_app=official_app,
+            legacy_source=legacy_cua_source,
+        ),
+        official_version=official_version,
+        browser_client_hash=browser_client_hash,
     )
-    text = _replace_all(
-        r'^NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S = ".*"$',
-        f'NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S = "{browser_client_hash}"',
-        text,
-        "trusted browser-client hash",
-    )
-    text = _replace_one(
-        r'^BROWSER_USE_CODEX_APP_VERSION = ".*"$',
-        f'BROWSER_USE_CODEX_APP_VERSION = "{official_version}"',
-        text,
-        "ChatGPT version",
-    )
-    text = _replace_one(
-        r'^SKY_CUA_SERVICE_PATH = ".*"$',
-        f'SKY_CUA_SERVICE_PATH = "{service}"',
-        text,
-        "Computer Use service path",
-    )
-    text, pipe_count = re.subn(
-        r'^SKY_CUA_SERVICE_NATIVE_PIPE_PATH = ".*"\n?',
-        "",
-        text,
-        flags=re.MULTILINE,
-    )
-    if pipe_count != 1:
-        raise TransitionError(
-            f"Expected one custom Computer Use native-pipe setting, found {pipe_count}"
-        )
     tomllib.loads(text)
     return text
 
@@ -415,6 +395,11 @@ def prepare(paths: TransitionPaths) -> dict[str, Any]:
             official_app=paths.official_app,
             official_version=version,
             browser_client_hash=browser_hash,
+            legacy_cua_source=paths.legacy_cua_source,
+        )
+        control_metadata = provision_control_runtime(
+            paths.control_runtime,
+            temporary,
         )
         _write_atomic(cloned_config, rewritten.encode("utf-8"), mode=0o600)
 
@@ -440,6 +425,8 @@ def prepare(paths: TransitionPaths) -> dict[str, Any]:
             "primaryConfigSha256": primary_config_hash,
             "primaryConfigSemanticSha256": _config_semantic_sha256(primary_config),
             "deployedCoreSha256": core_hash,
+            **control_metadata,
+            "legacyCuaSource": str(paths.legacy_cua_source),
             "chromeManifest": str(paths.chrome_manifest),
             "chromeManifestPresent": chrome_bytes is not None,
             "chromeManifestSha256": (
