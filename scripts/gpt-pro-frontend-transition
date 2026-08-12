@@ -2,8 +2,12 @@
 set -eu
 repo_root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 python="${repo_root}/.venv/bin/python"
+legacy_source="${SUDHIR_CODEX_LEGACY_CUA_SOURCE:-${HOME}/.sudhir-codex/control/legacy-cua-source}"
 if [ ! -x "${python}" ]; then
     echo "gpt-pro-frontend-transition: missing private Python runtime ${python}" >&2
     exit 69
+fi
+if [ -d "${legacy_source}" ]; then
+    export SUDHIR_CODEX_LEGACY_CUA_SOURCE="${legacy_source}"
 fi
 exec "${python}" -m sudhir_codex_gateway.frontend_transition "$@"

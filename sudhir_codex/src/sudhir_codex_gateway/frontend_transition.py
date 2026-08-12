@@ -6,6 +6,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -53,6 +54,7 @@ def sync_control_runtime(paths: TransitionPaths) -> dict[str, Any]:
             "officialVersion": version,
             "officialBuild": build,
             "browserClientSha256": browser_hash,
+            "legacyCuaSource": str(paths.legacy_cua_source),
             "controlSyncedAt": dt.datetime.now(dt.UTC).isoformat(),
         }
     )
@@ -143,6 +145,129 @@ def transition_processes(paths: TransitionPaths) -> list[tuple[int, int, str]]:
     return [row for row in _process_rows() if marker in row[2]]
 
 
+def _chatgpt_main_processes(
+    paths: TransitionPaths,
+) -> list[tuple[int, int, str]]:
+    executable = str(paths.official_app / "Contents" / "MacOS" / "ChatGPT")
+    return [
+        row
+        for row in _process_rows()
+        if row[2] == executable or row[2].startswith(f"{executable} ")
+    ]
+
+
+def _transition_main_processes(
+    paths: TransitionPaths,
+) -> list[tuple[int, int, str]]:
+    marker = f"--user-data-dir={paths.profile}"
+    return [row for row in _chatgpt_main_processes(paths) if marker in row[2]]
+
+
+def _official_main_processes(
+    paths: TransitionPaths,
+) -> list[tuple[int, int, str]]:
+    marker = f"--user-data-dir={paths.profile}"
+    return [row for row in _chatgpt_main_processes(paths) if marker not in row[2]]
+
+
+def _process_exists(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _terminate_processes(
+    processes: list[tuple[int, int, str]],
+    *,
+    timeout_seconds: float = 10,
+) -> None:
+    pids = sorted({pid for pid, _ppid, _command in processes})
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline and any(_process_exists(pid) for pid in pids):
+        time.sleep(0.25)
+
+    remaining = [pid for pid in pids if _process_exists(pid)]
+    for pid in remaining:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+    kill_deadline = time.monotonic() + 3
+    while time.monotonic() < kill_deadline and any(
+        _process_exists(pid) for pid in remaining
+    ):
+        time.sleep(0.1)
+    still_running = [pid for pid in remaining if _process_exists(pid)]
+    if still_running:
+        raise TransitionError(
+            f"Could not stop conflicting ChatGPT processes: {still_running}"
+        )
+
+
+def _healthy_status(value: dict[str, Any]) -> bool:
+    control = value.get("controlRuntime")
+    return (
+        value.get("running") is True
+        and value.get("appServerRunning") is True
+        and isinstance(control, dict)
+        and control.get("ready") is True
+    )
+
+
+def _activate_chatgpt(paths: TransitionPaths) -> None:
+    subprocess.run(
+        ["/usr/bin/open", "-a", str(paths.official_app)],
+        check=True,
+    )
+
+
+def ensure(paths: TransitionPaths) -> dict[str, Any]:
+    """Guarantee that the visible ChatGPT instance uses the Sudhir backend."""
+
+    official = _official_main_processes(paths)
+    if official:
+        _terminate_processes(official)
+
+    current = status(paths)
+    if _healthy_status(current):
+        _activate_chatgpt(paths)
+        return {
+            **current,
+            "launcherAction": "activated",
+            "primaryConfigDriftDetected": current.get("primaryConfigUnchanged")
+            is not True,
+        }
+
+    transition = _transition_main_processes(paths)
+    if transition:
+        _terminate_processes(transition)
+
+    launch(paths)
+    deadline = time.monotonic() + 45
+    while time.monotonic() < deadline:
+        current = status(paths)
+        if _healthy_status(current):
+            _activate_chatgpt(paths)
+            return {
+                **current,
+                "launcherAction": "launched",
+                "primaryConfigDriftDetected": current.get("primaryConfigUnchanged")
+                is not True,
+            }
+        time.sleep(0.5)
+    raise TransitionError("ChatGPT started without a healthy Sudhir-Codex app-server")
+
 
 def _wait_for_app_server(
     paths: TransitionPaths,
@@ -154,9 +279,7 @@ def _wait_for_app_server(
     while time.monotonic() < deadline:
         transition = transition_processes(paths)
         main_pids = {
-            pid
-            for pid, _ppid, command in transition
-            if main_executable in command
+            pid for pid, _ppid, command in transition if main_executable in command
         }
         if main_pids and any(
             ppid in main_pids
@@ -247,6 +370,7 @@ def _parser() -> argparse.ArgumentParser:
             "prepare",
             "sync-control-runtime",
             "launch",
+            "ensure",
             "status",
             "restore-chrome",
             "rollback",
@@ -266,6 +390,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "launch":
             launch(paths)
             print(f"Launched ChatGPT with transition profile {paths.profile}")
+        elif args.command == "ensure":
+            print(json.dumps(ensure(paths), indent=2, sort_keys=True))
         elif args.command == "status":
             print(json.dumps(status(paths), indent=2, sort_keys=True))
         elif args.command == "restore-chrome":

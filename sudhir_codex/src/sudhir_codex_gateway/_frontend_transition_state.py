@@ -102,7 +102,7 @@ class TransitionPaths:
             legacy_cua_source=Path(
                 os.environ.get(
                     "SUDHIR_CODEX_LEGACY_CUA_SOURCE",
-                    "/Applications/Sudhir-Codex.app/Contents/Resources/cua_node",
+                    str(home / ".sudhir-codex" / "control" / "legacy-cua-source"),
                 )
             ).expanduser(),
         )
@@ -142,7 +142,6 @@ class TransitionPaths:
     @property
     def rollback_root(self) -> Path:
         return self.repo_root / "dist" / "backups"
-
 
     @property
     def control_runtime(self) -> ControlRuntimePaths:
