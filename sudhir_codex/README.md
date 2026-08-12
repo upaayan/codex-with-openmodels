@@ -28,6 +28,10 @@ otherwise independent of Pi.
 
 ## Installation
 
+The current stable GitHub Release is
+[`openmodels-v0.1.0-rc.12`](https://github.com/upaayan/codex-with-openmodels/releases/tag/openmodels-v0.1.0-rc.12). The immutable tag retains its historical `rc.12`
+suffix, but the release is published as stable and Latest.
+
 On Apple Silicon macOS or Ubuntu 22.04 x64, clone the exact release tag and
 download its matching archive plus `SHA256SUMS`. Install the already-built
 release without compiling Rust:
