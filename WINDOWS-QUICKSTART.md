@@ -16,6 +16,11 @@ Run all commands below in the WSL2 shell, not native PowerShell.
 
 ## Install the Linux MUSL release
 
+The current stable GitHub Release is
+[`openmodels-v0.1.0-rc.12`](https://github.com/upaayan/codex-with-openmodels/releases/tag/openmodels-v0.1.0-rc.12). Clone that exact tag and use its Linux x64 MUSL
+archive. The tag retains its historical `rc.12` suffix, but GitHub marks the
+release stable and Latest.
+
 Clone the exact release tag at `$HOME/.playground/sudhir-codex`. Download these
 two release files into the checkout:
 

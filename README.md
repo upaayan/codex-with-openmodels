@@ -12,6 +12,18 @@ Nothing is merged or released automatically.
 This project is not affiliated with, endorsed by, or supported by OpenAI.
 OpenAI and Codex are trademarks of their respective owner.
 
+## Current stable release
+
+The current stable and GitHub Latest release is
+[`openmodels-v0.1.0-rc.12`](https://github.com/upaayan/codex-with-openmodels/releases/tag/openmodels-v0.1.0-rc.12). It was built from
+`ea745c5af4afa070c0462cb7465f70429b77b573` and accepted on Apple Silicon macOS and on the supported
+Windows/WSL2 deployment using the Linux x64 MUSL backend.
+
+The tag retains its historical `rc.12` suffix for immutable build provenance,
+but the GitHub Release is published as a stable, non-prerelease release. Download
+the matching platform archive together with `SHA256SUMS` and verify it before
+installation.
+
 ## Models and access
 
 - **GPT models** use the normal Codex sign-in and the user's existing
@@ -56,12 +68,12 @@ API key, authentication file, or local configuration is included.
 
 ## Supported release targets
 
-The initial release workflow builds:
+The native release workflow builds:
 
 - Apple Silicon macOS: `aarch64-apple-darwin`
 - Ubuntu 22.04 x64: `x86_64-unknown-linux-musl`
 
-Release archives contain native runtime binaries and one `SHA256SUMS` file.
+The release provides two native runtime archives and one `SHA256SUMS` file.
 Windows runs the Linux x64 MUSL backend inside WSL2; WSL1 and a native Windows
 backend are not supported release targets. The native Windows Tauri frontend
 continues to launch the WSL2 backend through `wsl.exe`.
