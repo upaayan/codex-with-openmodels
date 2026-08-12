@@ -9,7 +9,9 @@ from pathlib import Path
 from unittest import mock
 
 from sudhir_codex_gateway._frontend_transition_control import _rewrite_instructions
-from sudhir_codex_gateway._frontend_transition_control import _rewrite_native_pipe_source
+from sudhir_codex_gateway._frontend_transition_control import (
+    _rewrite_native_pipe_source,
+)
 from sudhir_codex_gateway._frontend_transition_control import _wrapper_text
 from sudhir_codex_gateway._frontend_transition_state import BASELINE_CONFIG
 from sudhir_codex_gateway._frontend_transition_state import TRANSITION_METADATA
@@ -17,6 +19,7 @@ from sudhir_codex_gateway._frontend_transition_state import TransitionPaths
 from sudhir_codex_gateway._frontend_transition_state import prepare
 from sudhir_codex_gateway._frontend_transition_state import restore_chrome
 from sudhir_codex_gateway._frontend_transition_state import rewrite_transition_config
+from sudhir_codex_gateway.frontend_transition import ensure
 from sudhir_codex_gateway.frontend_transition import launch
 from sudhir_codex_gateway.frontend_transition import rollback
 from sudhir_codex_gateway.frontend_transition import sync_control_runtime
@@ -240,9 +243,7 @@ BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"
         )
 
         with (
-            mock.patch(
-                "sudhir_codex_gateway.frontend_transition.sync_control_runtime"
-            ),
+            mock.patch("sudhir_codex_gateway.frontend_transition.sync_control_runtime"),
             mock.patch(
                 "sudhir_codex_gateway.frontend_transition._wait_for_app_server",
                 return_value=False,
@@ -270,6 +271,111 @@ BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"
             command,
         )
 
+    def test_ensure_activates_healthy_transition_without_relaunch(self) -> None:
+        healthy = {
+            "running": True,
+            "appServerRunning": True,
+            "primaryConfigUnchanged": True,
+            "controlRuntime": {"ready": True},
+        }
+        with (
+            mock.patch(
+                "sudhir_codex_gateway.frontend_transition.status",
+                return_value=healthy,
+            ),
+            mock.patch(
+                "sudhir_codex_gateway.frontend_transition._official_main_processes",
+                return_value=[],
+            ),
+            mock.patch(
+                "sudhir_codex_gateway.frontend_transition._activate_chatgpt"
+            ) as activate,
+            mock.patch(
+                "sudhir_codex_gateway.frontend_transition.launch"
+            ) as launch_transition,
+        ):
+            result = ensure(self.paths)
+
+        self.assertEqual(result["launcherAction"], "activated")
+        self.assertFalse(result["primaryConfigDriftDetected"])
+        activate.assert_called_once_with(self.paths)
+        launch_transition.assert_not_called()
+
+    def test_ensure_stops_official_backend_and_launches_transition(self) -> None:
+        unhealthy = {
+            "running": False,
+            "appServerRunning": False,
+            "primaryConfigUnchanged": False,
+            "controlRuntime": {"ready": True},
+        }
+        healthy = {
+            "running": True,
+            "appServerRunning": True,
+            "primaryConfigUnchanged": False,
+            "controlRuntime": {"ready": True},
+        }
+        official = [(101, 1, "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT")]
+        with (
+            mock.patch(
+                "sudhir_codex_gateway.frontend_transition.status",
+                side_effect=(unhealthy, healthy),
+            ),
+            mock.patch(
+                "sudhir_codex_gateway.frontend_transition._official_main_processes",
+                return_value=official,
+            ),
+            mock.patch(
+                "sudhir_codex_gateway.frontend_transition._transition_main_processes",
+                return_value=[],
+            ),
+            mock.patch(
+                "sudhir_codex_gateway.frontend_transition._terminate_processes"
+            ) as terminate,
+            mock.patch(
+                "sudhir_codex_gateway.frontend_transition.launch"
+            ) as launch_transition,
+            mock.patch(
+                "sudhir_codex_gateway.frontend_transition._activate_chatgpt"
+            ) as activate,
+        ):
+            result = ensure(self.paths)
+
+        self.assertEqual(result["launcherAction"], "launched")
+        self.assertTrue(result["primaryConfigDriftDetected"])
+        terminate.assert_called_once_with(official)
+        launch_transition.assert_called_once_with(self.paths)
+        activate.assert_called_once_with(self.paths)
+
+    def test_ensure_tolerates_primary_config_drift(self) -> None:
+        healthy = {
+            "running": True,
+            "appServerRunning": True,
+            "primaryConfigUnchanged": False,
+            "controlRuntime": {"ready": True},
+        }
+        with (
+            mock.patch(
+                "sudhir_codex_gateway.frontend_transition.status",
+                return_value=healthy,
+            ),
+            mock.patch(
+                "sudhir_codex_gateway.frontend_transition._official_main_processes",
+                return_value=[],
+            ),
+            mock.patch(
+                "sudhir_codex_gateway.frontend_transition._activate_chatgpt"
+            ) as activate,
+            mock.patch(
+                "sudhir_codex_gateway.frontend_transition.launch"
+            ) as launch_transition,
+        ):
+            result = ensure(self.paths)
+
+        self.assertEqual(result["launcherAction"], "activated")
+        self.assertTrue(result["primaryConfigDriftDetected"])
+        activate.assert_called_once_with(self.paths)
+        launch_transition.assert_not_called()
+
     def test_control_wrapper_targets_copied_runtime(self) -> None:
         control = self.paths.control_runtime
         wrapper = _wrapper_text(control)
@@ -281,8 +387,7 @@ BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"
 
     def test_native_pipe_rewrite_uses_transition_specific_environment(self) -> None:
         source = (
-            'const a="SKY_CUA_SERVICE_PATH";'
-            'const b="SKY_CUA_SERVICE_NATIVE_PIPE_PATH";'
+            'const a="SKY_CUA_SERVICE_PATH";const b="SKY_CUA_SERVICE_NATIVE_PIPE_PATH";'
         )
         updated = _rewrite_native_pipe_source(source)
 
@@ -360,8 +465,8 @@ Keep this policy text.
         metadata = json.loads((self.transition / TRANSITION_METADATA).read_text())
         self.assertEqual(metadata["officialVersion"], "26.new")
         self.assertEqual(metadata["officialBuild"], "5678")
+        self.assertEqual(metadata["legacyCuaSource"], str(self.legacy_cua_source))
         self.assertEqual(metadata["controlNodeReplSha256"], "fresh-runtime")
-
 
     def test_chrome_restore_and_rollback_archive_without_touching_primary(self) -> None:
         self.transition.mkdir()
