@@ -15,7 +15,9 @@ from typing import Any
 
 from ._frontend_transition_control import ControlRuntimeError
 from ._frontend_transition_control import apply_control_config
+from ._frontend_transition_control import apply_primary_control_config
 from ._frontend_transition_control import provision_control_runtime
+from ._frontend_transition_control import provision_primary_control_runtime
 from ._frontend_transition_control import runtime_status
 
 from ._frontend_transition_state import TransitionError
@@ -64,6 +66,32 @@ def sync_control_runtime(paths: TransitionPaths) -> dict[str, Any]:
         mode=0o600,
     )
     return control_metadata
+
+
+def sync_primary_control_runtime(paths: TransitionPaths) -> dict[str, Any]:
+    """Refresh Computer Use for the shared primary Sudhir-Codex home."""
+
+    _identifier, version, _build, browser_hash = _verify_official_resources(paths)
+    primary_config = paths.primary_state / "config.toml"
+    if not primary_config.is_file():
+        raise TransitionError(
+            f"Primary Sudhir-Codex state is incomplete: {paths.primary_state}"
+        )
+    source = primary_config.read_text(encoding="utf-8")
+    updated = apply_primary_control_config(
+        source,
+        paths.control_runtime,
+        official_version=version,
+        browser_client_hash=browser_hash,
+    )
+    control_metadata = provision_primary_control_runtime(paths.control_runtime)
+    if updated != source:
+        _write_atomic(primary_config, updated.encode("utf-8"), mode=0o600)
+    return {
+        **control_metadata,
+        "officialVersion": version,
+        "browserClientSha256": browser_hash,
+    }
 
 
 def launch(paths: TransitionPaths) -> None:
@@ -119,6 +147,66 @@ def launch(paths: TransitionPaths) -> None:
         # The app may install a newer bundled Computer Use plugin during startup.
         time.sleep(1.5)
         sync_control_runtime(paths)
+
+
+def launch_primary(paths: TransitionPaths) -> None:
+    """Launch the standard frontend with the primary Sudhir-Codex home."""
+
+    control = paths.control_runtime
+    control_status = runtime_status(control)
+    if control_status.get("ready") is not True:
+        raise TransitionError(
+            "The preserved ChatGPT control runtime is not ready for primary-home launch"
+        )
+    primary_config = paths.primary_state / "config.toml"
+    if not primary_config.is_file():
+        raise TransitionError(
+            f"Primary Sudhir-Codex state is incomplete: {paths.primary_state}"
+        )
+    control_metadata = sync_primary_control_runtime(paths)
+    command = [
+        "/usr/bin/open",
+        "-n",
+        "-j",
+        "-g",
+        "-a",
+        str(paths.official_app),
+        "--env",
+        f"CODEX_CLI_PATH={paths.installed_launcher}",
+        "--env",
+        f"CODEX_HOME={paths.primary_state}",
+        "--env",
+        f"SUDHIR_CODEX_ROOT={paths.repo_root}",
+        "--env",
+        f"SUDHIR_CODEX_STATE={paths.primary_state}",
+        "--env",
+        f"SUDHIR_CODEX_GATEWAY_STATE={paths.primary_state}",
+        "--env",
+        f"SUDHIR_CODEX_PI_AGENT_DIR={paths.pi_agent_dir}",
+        "--env",
+        "CODEX_APP_SERVER_FORCE_CLI=1",
+        "--env",
+        f"CODEX_NODE_REPL_PATH={control.node_repl}",
+        "--env",
+        f"CODEX_BROWSER_USE_NODE_PATH={control.node}",
+        "--env",
+        "SKY_CUA_SERVICE_PATH=",
+        "--env",
+        "SKY_CUA_SERVICE_NATIVE_PIPE_PATH=",
+        "--env",
+        "SUDHIR_CUA=0",
+        "--env",
+        f"SUDHIR_BROWSER_CLIENT_SHA256S={control_metadata['browserClientSha256']}",
+        "--env",
+        f"CODEX_ELECTRON_USER_DATA_PATH={paths.profile}",
+        "--args",
+        f"--user-data-dir={paths.profile}",
+    ]
+    subprocess.run(command, check=True)
+    if _wait_for_app_server(paths, timeout_seconds=20):
+        # The app may install a newer bundled Computer Use plugin during startup.
+        time.sleep(1.5)
+        sync_primary_control_runtime(paths)
 
 
 def _process_rows() -> list[tuple[int, int, str]]:
@@ -225,6 +313,44 @@ def _healthy_status(value: dict[str, Any]) -> bool:
     )
 
 
+def _process_has_open_path(pid: int, path: Path) -> bool:
+    completed = subprocess.run(
+        ["/usr/sbin/lsof", "-n", "-a", "-p", str(pid), str(path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return completed.returncode == 0
+
+
+def status_primary(paths: TransitionPaths) -> dict[str, Any]:
+    transition = _transition_main_processes(paths)
+    main_pids = {pid for pid, _ppid, _command in transition}
+    app_server_running = any(
+        ppid in main_pids and "sudhir-codex-core" in command and "app-server" in command
+        for _pid, ppid, command in _process_rows()
+    )
+    primary_socket = paths.primary_state / "ipc" / "ipc.sock"
+    primary_home_active = any(
+        _process_has_open_path(pid, primary_socket) for pid in main_pids
+    )
+    return {
+        "running": bool(main_pids),
+        "appServerRunning": app_server_running,
+        "primaryHomeActive": primary_home_active,
+        "primaryState": str(paths.primary_state),
+        "transitionProfile": str(paths.profile),
+    }
+
+
+def _healthy_primary_status(value: dict[str, Any]) -> bool:
+    return (
+        value.get("running") is True
+        and value.get("appServerRunning") is True
+        and value.get("primaryHomeActive") is True
+    )
+
+
 def _activate_chatgpt(paths: TransitionPaths) -> None:
     subprocess.run(
         ["/usr/bin/open", "-a", str(paths.official_app)],
@@ -267,6 +393,35 @@ def ensure(paths: TransitionPaths) -> dict[str, Any]:
             }
         time.sleep(0.5)
     raise TransitionError("ChatGPT started without a healthy Sudhir-Codex app-server")
+
+
+def ensure_primary(paths: TransitionPaths) -> dict[str, Any]:
+    """Guarantee that the visible ChatGPT instance uses the primary state root."""
+
+    official = _official_main_processes(paths)
+    if official:
+        _terminate_processes(official)
+
+    current = status_primary(paths)
+    if _healthy_primary_status(current):
+        _activate_chatgpt(paths)
+        return {**current, "launcherAction": "activated"}
+
+    transition = _transition_main_processes(paths)
+    if transition:
+        _terminate_processes(transition)
+
+    launch_primary(paths)
+    deadline = time.monotonic() + 45
+    while time.monotonic() < deadline:
+        current = status_primary(paths)
+        if _healthy_primary_status(current):
+            _activate_chatgpt(paths)
+            return {**current, "launcherAction": "launched"}
+        time.sleep(0.5)
+    raise TransitionError(
+        "ChatGPT started without a healthy primary-home Sudhir-Codex app-server"
+    )
 
 
 def _wait_for_app_server(
@@ -371,6 +526,7 @@ def _parser() -> argparse.ArgumentParser:
             "sync-control-runtime",
             "launch",
             "ensure",
+            "ensure-primary",
             "status",
             "restore-chrome",
             "rollback",
@@ -392,6 +548,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Launched ChatGPT with transition profile {paths.profile}")
         elif args.command == "ensure":
             print(json.dumps(ensure(paths), indent=2, sort_keys=True))
+        elif args.command == "ensure-primary":
+            print(json.dumps(ensure_primary(paths), indent=2, sort_keys=True))
         elif args.command == "status":
             print(json.dumps(status(paths), indent=2, sort_keys=True))
         elif args.command == "restore-chrome":

@@ -444,6 +444,10 @@ function isChromeComputerUseInput(input) {{
 '''
 
 
+def _primary_wrapper_text(paths: ControlRuntimePaths) -> str:
+    return _wrapper_text(paths)
+
+
 def _rewrite_instructions(source: str) -> str:
     replacement = '''## Bootstrap
 
@@ -527,11 +531,17 @@ def _prepare_plugin_assets(
     return assets
 
 
-def _install_plugin_assets(working_state: Path, assets: PluginAssets) -> list[str]:
+def _install_plugin_assets(
+    working_state: Path,
+    assets: PluginAssets,
+    *,
+    backups: Path | None = None,
+) -> list[str]:
     roots = _plugin_roots(working_state)
     if not roots:
         raise ControlRuntimeError("Transition state has no installed Computer Use plugin")
-    backups = working_state / CONTROL_ROOT_NAME / "original-plugins"
+    if backups is None:
+        backups = working_state / CONTROL_ROOT_NAME / "original-plugins"
     versions: list[str] = []
     sources = {
         PLUGIN_FILES[0]: assets.wrapper,
@@ -550,6 +560,57 @@ def _install_plugin_assets(working_state: Path, assets: PluginAssets) -> list[st
             destination.parent.mkdir(parents=True, exist_ok=True)
             _write_atomic(destination, source.read_bytes(), mode=0o600)
     return versions
+
+
+def _prepare_primary_plugin_assets(paths: ControlRuntimePaths) -> PluginAssets:
+    state = paths.primary_state
+    if not _plugin_roots(state):
+        raise ControlRuntimeError("Primary state has no installed Computer Use plugin")
+    assets = _asset_paths(state / "control" / PLUGIN_ASSETS_NAME)
+    _write_atomic(
+        assets.wrapper,
+        _primary_wrapper_text(paths).encode("utf-8"),
+        mode=0o600,
+    )
+    for relative, destination in (
+        (PLUGIN_FILES[1], assets.node_repl_instructions),
+        (PLUGIN_FILES[2], assets.skill),
+    ):
+        source = _instruction_template(state, relative)
+        _write_atomic(
+            destination,
+            _rewrite_instructions(source.read_text(encoding="utf-8")).encode("utf-8"),
+            mode=0o600,
+        )
+    return assets
+
+
+def provision_primary_control_runtime(paths: ControlRuntimePaths) -> dict[str, Any]:
+    """Verify shared control components and patch primary-home plugin assets."""
+
+    component_metadata = _verify_control_components(paths)
+    _verify_openai_node_repl(paths.node_repl)
+    if not paths.node.is_file() or not os.access(paths.node, os.X_OK):
+        raise ControlRuntimeError(f"Legacy Node runtime is missing: {paths.node}")
+    if not paths.official_node_modules.is_dir():
+        raise ControlRuntimeError(
+            f"Official Computer Use modules are missing: {paths.official_node_modules}"
+        )
+    assets = _prepare_primary_plugin_assets(paths)
+    plugin_versions = _install_plugin_assets(
+        paths.primary_state,
+        assets,
+        backups=paths.primary_state / "control" / "original-plugins",
+    )
+    return {
+        **component_metadata,
+        "controlNodeRepl": str(paths.node_repl),
+        "controlNode": str(paths.node),
+        "controlHelper": str(paths.helper),
+        "controlSocket": str(paths.socket),
+        "controlPluginVersions": plugin_versions,
+        "controlPluginWrapperSha256": _sha256(assets.wrapper),
+    }
 
 
 def _verify_runtime(
@@ -704,6 +765,104 @@ def apply_control_config(
             _TRANSITION_SERVICE_PATH_KEY,
             str(paths.helper),
             _UPSTREAM_SERVICE_PATH_KEY,
+        ),
+        (
+            "mcp_servers.node_repl.env",
+            _TRANSITION_SOCKET_PATH_KEY,
+            str(paths.socket),
+            _TRANSITION_SERVICE_PATH_KEY,
+        ),
+        (
+            "shell_environment_policy.set",
+            "NODE_REPL_TRUSTED_CODE_PATHS",
+            trusted_paths,
+            None,
+        ),
+        (
+            "shell_environment_policy.set",
+            "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S",
+            browser_client_hash,
+            None,
+        ),
+    )
+    updated = source
+    for table, key, value, insert_after in values:
+        updated = _set_table_string(
+            updated,
+            table,
+            key,
+            value,
+            insert_after=insert_after,
+        )
+    tomllib.loads(updated)
+    return updated
+
+
+def apply_primary_control_config(
+    source: str,
+    paths: ControlRuntimePaths,
+    *,
+    official_version: str,
+    browser_client_hash: str,
+) -> str:
+    """Restore primary-home Computer Use settings without changing CODEX_HOME."""
+
+    trusted_paths = f"{paths.primary_state}:{paths.official_node_modules}"
+    values = (
+        ("mcp_servers.node_repl", "command", str(paths.node_repl), None),
+        (
+            "mcp_servers.node_repl.env",
+            "NODE_REPL_NODE_MODULE_DIRS",
+            str(paths.official_node_modules),
+            None,
+        ),
+        (
+            "mcp_servers.node_repl.env",
+            "NODE_REPL_NODE_PATH",
+            str(paths.node),
+            None,
+        ),
+        (
+            "mcp_servers.node_repl.env",
+            "CODEX_HOME",
+            str(paths.primary_state),
+            "NODE_REPL_NODE_PATH",
+        ),
+        (
+            "mcp_servers.node_repl.env",
+            "NODE_REPL_TRUSTED_CODE_PATHS",
+            trusted_paths,
+            None,
+        ),
+        (
+            "mcp_servers.node_repl.env",
+            "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S",
+            browser_client_hash,
+            None,
+        ),
+        (
+            "mcp_servers.node_repl.env",
+            "BROWSER_USE_CODEX_APP_VERSION",
+            official_version,
+            None,
+        ),
+        (
+            "mcp_servers.node_repl.env",
+            _UPSTREAM_SERVICE_PATH_KEY,
+            str(paths.helper),
+            "BROWSER_USE_CODEX_APP_VERSION",
+        ),
+        (
+            "mcp_servers.node_repl.env",
+            _UPSTREAM_SOCKET_PATH_KEY,
+            str(paths.socket),
+            _UPSTREAM_SERVICE_PATH_KEY,
+        ),
+        (
+            "mcp_servers.node_repl.env",
+            _TRANSITION_SERVICE_PATH_KEY,
+            str(paths.helper),
+            _UPSTREAM_SOCKET_PATH_KEY,
         ),
         (
             "mcp_servers.node_repl.env",

@@ -13,6 +13,10 @@ from sudhir_codex_gateway._frontend_transition_control import (
     _rewrite_native_pipe_source,
 )
 from sudhir_codex_gateway._frontend_transition_control import _wrapper_text
+from sudhir_codex_gateway._frontend_transition_control import _primary_wrapper_text
+from sudhir_codex_gateway._frontend_transition_control import (
+    apply_primary_control_config,
+)
 from sudhir_codex_gateway._frontend_transition_state import BASELINE_CONFIG
 from sudhir_codex_gateway._frontend_transition_state import TRANSITION_METADATA
 from sudhir_codex_gateway._frontend_transition_state import TransitionPaths
@@ -23,6 +27,7 @@ from sudhir_codex_gateway.frontend_transition import ensure
 from sudhir_codex_gateway.frontend_transition import launch
 from sudhir_codex_gateway.frontend_transition import rollback
 from sudhir_codex_gateway.frontend_transition import sync_control_runtime
+import sudhir_codex_gateway.frontend_transition as frontend_transition
 
 
 class FrontendTransitionTests(unittest.TestCase):
@@ -271,6 +276,64 @@ BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"
             command,
         )
 
+    def test_launch_primary_syncs_primary_computer_use_before_and_after_launch(
+        self,
+    ) -> None:
+        self.assertTrue(
+            hasattr(frontend_transition, "launch_primary"),
+            "primary-home launch mode is missing",
+        )
+        launch_primary = frontend_transition.launch_primary
+        self.transition.mkdir()
+        self.profile.mkdir()
+        (self.transition / TRANSITION_METADATA).write_text(
+            json.dumps({"browserClientSha256": "official-browser-hash"})
+        )
+
+        events: list[str] = []
+
+        def sync_primary(_paths: TransitionPaths) -> dict[str, str]:
+            events.append("sync")
+            return {"browserClientSha256": "official-browser-hash"}
+
+        with (
+            mock.patch(
+                "sudhir_codex_gateway.frontend_transition.sync_primary_control_runtime",
+                side_effect=sync_primary,
+            ) as sync,
+            mock.patch(
+                "sudhir_codex_gateway.frontend_transition.runtime_status",
+                return_value={"ready": True},
+            ),
+            mock.patch(
+                "sudhir_codex_gateway.frontend_transition._wait_for_app_server",
+                return_value=True,
+            ),
+            mock.patch(
+                "sudhir_codex_gateway.frontend_transition.subprocess.run",
+                side_effect=lambda _command, check: events.append("launch"),
+            ) as run,
+            mock.patch("sudhir_codex_gateway.frontend_transition.time.sleep"),
+        ):
+            launch_primary(self.paths)
+
+        self.assertEqual(events, ["sync", "launch", "sync"])
+        self.assertEqual(sync.call_count, 2)
+        command = run.call_args.args[0]
+        self.assertIn(f"CODEX_HOME={self.primary}", command)
+        self.assertIn(f"SUDHIR_CODEX_STATE={self.primary}", command)
+        self.assertIn(f"SUDHIR_CODEX_GATEWAY_STATE={self.primary}", command)
+        self.assertIn(
+            f"CODEX_CLI_PATH={self.paths.installed_launcher}",
+            command,
+        )
+        self.assertNotIn(f"CODEX_HOME={self.transition}", command)
+        self.assertNotIn(f"SUDHIR_CODEX_STATE={self.transition}", command)
+        control = self.paths.control_runtime
+        self.assertIn(f"CODEX_NODE_REPL_PATH={control.node_repl}", command)
+        self.assertIn(f"CODEX_BROWSER_USE_NODE_PATH={control.node}", command)
+        self.assertIn(f"--user-data-dir={self.profile}", command)
+
     def test_ensure_activates_healthy_transition_without_relaunch(self) -> None:
         healthy = {
             "running": True,
@@ -300,6 +363,47 @@ BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"
         self.assertFalse(result["primaryConfigDriftDetected"])
         activate.assert_called_once_with(self.paths)
         launch_transition.assert_not_called()
+
+    def test_ensure_primary_activates_healthy_primary_home_without_relaunch(
+        self,
+    ) -> None:
+        self.assertTrue(
+            hasattr(frontend_transition, "ensure_primary"),
+            "primary-home ensure mode is missing",
+        )
+        healthy = {
+            "running": True,
+            "appServerRunning": True,
+            "primaryHomeActive": True,
+        }
+        with (
+            mock.patch(
+                "sudhir_codex_gateway.frontend_transition.status_primary",
+                return_value=healthy,
+            ),
+            mock.patch(
+                "sudhir_codex_gateway.frontend_transition._official_main_processes",
+                return_value=[],
+            ),
+            mock.patch(
+                "sudhir_codex_gateway.frontend_transition._activate_chatgpt"
+            ) as activate,
+            mock.patch(
+                "sudhir_codex_gateway.frontend_transition.launch_primary"
+            ) as launch_shared,
+        ):
+            result = frontend_transition.ensure_primary(self.paths)
+
+        self.assertEqual(result["launcherAction"], "activated")
+        activate.assert_called_once_with(self.paths)
+        launch_shared.assert_not_called()
+
+    def test_parser_exposes_primary_home_mode(self) -> None:
+        parser = frontend_transition._parser()
+        command_action = next(
+            action for action in parser._actions if action.dest == "command"
+        )
+        self.assertIn("ensure-primary", command_action.choices)
 
     def test_ensure_stops_official_backend_and_launches_transition(self) -> None:
         unhealthy = {
@@ -384,6 +488,59 @@ BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"
         self.assertIn(str(control.helper), wrapper)
         self.assertNotIn("/Applications/Sudhir-Codex.app", wrapper)
         self.assertIn("setupComputerUseRuntime", wrapper)
+
+    def test_primary_wrapper_uses_matching_legacy_client_and_starts_helper(
+        self,
+    ) -> None:
+        control = self.paths.control_runtime
+        wrapper = _primary_wrapper_text(control)
+
+        self.assertIn(str(control.legacy_create_client), wrapper)
+        self.assertIn(str(control.helper), wrapper)
+        self.assertIn("startConfiguredSudhirComputerUseService();", wrapper)
+        self.assertNotIn("NODE_REPL_NODE_MODULE_DIRS", wrapper)
+
+    def test_primary_control_config_restores_helper_socket_and_primary_home(
+        self,
+    ) -> None:
+        config_path = self.primary / "config.toml"
+        source = config_path.read_text(encoding="utf-8")
+        source = source.replace(
+            str(self.primary / "control" / "Sudhir Computer Use.app"),
+            str(self.primary / "computer-use" / "Codex Computer Use.app"),
+        ).replace(
+            f'SKY_CUA_SERVICE_NATIVE_PIPE_PATH = "{self.primary}/control/run/computer-use.sock"\n',
+            "",
+        )
+        control = self.paths.control_runtime
+
+        updated = apply_primary_control_config(
+            source,
+            control,
+            official_version="26.new",
+            browser_client_hash="fresh-browser-hash",
+        )
+
+        self.assertIn(f'command = "{control.node_repl}"', updated)
+        self.assertIn(
+            f'NODE_REPL_NODE_MODULE_DIRS = "{control.official_node_modules}"',
+            updated,
+        )
+        self.assertIn(f'NODE_REPL_NODE_PATH = "{control.node}"', updated)
+        self.assertIn(f'CODEX_HOME = "{self.primary}"', updated)
+        self.assertNotIn(f'CODEX_HOME = "{self.transition}"', updated)
+        self.assertIn(f'SKY_CUA_SERVICE_PATH = "{control.helper}"', updated)
+        self.assertIn(
+            f'SKY_CUA_SERVICE_NATIVE_PIPE_PATH = "{control.socket}"',
+            updated,
+        )
+        self.assertIn(f'SUDHIR_CUA_SERVICE_PATH = "{control.helper}"', updated)
+        self.assertIn(
+            f'SUDHIR_CUA_SERVICE_NATIVE_PIPE_PATH = "{control.socket}"',
+            updated,
+        )
+        self.assertEqual(updated.count("fresh-browser-hash"), 2)
+        self.assertIn('BROWSER_USE_CODEX_APP_VERSION = "26.new"', updated)
 
     def test_native_pipe_rewrite_uses_transition_specific_environment(self) -> None:
         source = (
