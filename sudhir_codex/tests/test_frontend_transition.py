@@ -3,6 +3,7 @@ import json
 import os
 import plistlib
 import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -27,6 +28,7 @@ from sudhir_codex_gateway.frontend_transition import ensure
 from sudhir_codex_gateway.frontend_transition import launch
 from sudhir_codex_gateway.frontend_transition import rollback
 from sudhir_codex_gateway.frontend_transition import sync_control_runtime
+import sudhir_codex_gateway._frontend_transition_control as frontend_control
 import sudhir_codex_gateway.frontend_transition as frontend_transition
 
 
@@ -276,7 +278,7 @@ BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"
             command,
         )
 
-    def test_launch_primary_syncs_primary_computer_use_before_and_after_launch(
+    def test_launch_primary_provisions_stable_computer_use_before_launch(
         self,
     ) -> None:
         self.assertTrue(
@@ -317,8 +319,8 @@ BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"
         ):
             launch_primary(self.paths)
 
-        self.assertEqual(events, ["sync", "launch", "sync"])
-        self.assertEqual(sync.call_count, 2)
+        self.assertEqual(events, ["sync", "launch"])
+        sync.assert_called_once_with(self.paths)
         command = run.call_args.args[0]
         self.assertIn(f"CODEX_HOME={self.primary}", command)
         self.assertIn(f"SUDHIR_CODEX_STATE={self.primary}", command)
@@ -330,7 +332,8 @@ BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"
         self.assertNotIn(f"CODEX_HOME={self.transition}", command)
         self.assertNotIn(f"SUDHIR_CODEX_STATE={self.transition}", command)
         control = self.paths.control_runtime
-        self.assertIn(f"CODEX_NODE_REPL_PATH={control.node_repl}", command)
+        self.assertIn(f"CODEX_NODE_REPL_PATH={control.primary_node_repl}", command)
+        self.assertNotIn(f"CODEX_NODE_REPL_PATH={control.node_repl}", command)
         self.assertIn(f"CODEX_BROWSER_USE_NODE_PATH={control.node}", command)
         self.assertIn(f"--user-data-dir={self.profile}", command)
 
@@ -391,12 +394,16 @@ BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"
             mock.patch(
                 "sudhir_codex_gateway.frontend_transition.launch_primary"
             ) as launch_shared,
+            mock.patch(
+                "sudhir_codex_gateway.frontend_transition.sync_primary_control_runtime"
+            ) as sync_primary,
         ):
             result = frontend_transition.ensure_primary(self.paths)
 
         self.assertEqual(result["launcherAction"], "activated")
         activate.assert_called_once_with(self.paths)
         launch_shared.assert_not_called()
+        sync_primary.assert_called_once_with(self.paths)
 
     def test_parser_exposes_primary_home_mode(self) -> None:
         parser = frontend_transition._parser()
@@ -500,6 +507,105 @@ BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"
         self.assertIn("startConfiguredSudhirComputerUseService();", wrapper)
         self.assertNotIn("NODE_REPL_NODE_MODULE_DIRS", wrapper)
 
+    def test_primary_node_repl_shim_overrides_poisoned_frontend_environment(
+        self,
+    ) -> None:
+        self.assertTrue(
+            hasattr(frontend_control, "_primary_node_repl_shim_text"),
+            "stable primary node_repl shim is missing",
+        )
+        control = self.paths.control_runtime
+        control.node_repl.parent.mkdir(parents=True)
+        control.node_repl.write_text(
+            "#!/bin/sh\n"
+            "printf '%s\\n' \"$CODEX_HOME\" \"$NODE_REPL_NODE_PATH\" "
+            "\"$NODE_REPL_NODE_MODULE_DIRS\" \"$SKY_CUA_SERVICE_PATH\" "
+            "\"$SKY_CUA_SERVICE_NATIVE_PIPE_PATH\" \"$SUDHIR_CUA_SERVICE_PATH\" "
+            "\"$SUDHIR_CUA_SERVICE_NATIVE_PIPE_PATH\"\n",
+            encoding="utf-8",
+        )
+        control.node_repl.chmod(0o700)
+        control.primary_node_repl.parent.mkdir(parents=True)
+        control.primary_node_repl.write_text(
+            frontend_control._primary_node_repl_shim_text(control),
+            encoding="utf-8",
+        )
+        control.primary_node_repl.chmod(0o700)
+        poisoned = {
+            **os.environ,
+            "CODEX_HOME": "/tmp/wrong-codex-home",
+            "NODE_REPL_NODE_PATH": "/tmp/wrong-node",
+            "NODE_REPL_NODE_MODULE_DIRS": "/tmp/wrong-node-modules",
+            "SKY_CUA_SERVICE_PATH": "/tmp/wrong-helper",
+            "SKY_CUA_SERVICE_NATIVE_PIPE_PATH": "/tmp/wrong.sock",
+            "SUDHIR_CUA_SERVICE_PATH": "/tmp/wrong-helper",
+            "SUDHIR_CUA_SERVICE_NATIVE_PIPE_PATH": "/tmp/wrong.sock",
+        }
+
+        completed = subprocess.run(
+            [str(control.primary_node_repl), "--probe"],
+            check=True,
+            capture_output=True,
+            env=poisoned,
+            text=True,
+        )
+
+        self.assertEqual(
+            completed.stdout.splitlines(),
+            [
+                str(self.primary),
+                str(control.node),
+                str(control.official_node_modules),
+                str(control.helper),
+                str(control.socket),
+                str(control.helper),
+                str(control.socket),
+            ],
+        )
+
+    def test_primary_local_skill_uses_stable_wrapper_outside_plugin_cache(
+        self,
+    ) -> None:
+        self.assertTrue(
+            hasattr(frontend_control, "_rewrite_primary_skill"),
+            "stable primary Computer Use skill rewrite is missing",
+        )
+        source = """---
+name: computer-use
+---
+
+## Bootstrap
+
+```js
+globalThis.sky = (await import("@oai/sky")).sky;
+```
+
+## API surface
+
+Keep this API text.
+"""
+        control = self.paths.control_runtime
+
+        updated = frontend_control._rewrite_primary_skill(source, control)
+
+        self.assertIn(str(control.primary_wrapper), updated)
+        self.assertNotIn("<plugin root>", updated)
+        self.assertNotIn('import("@oai/sky")', updated)
+        self.assertIn("Keep this API text.", updated)
+
+    def test_primary_control_config_points_to_stable_node_repl_shim(self) -> None:
+        control = self.paths.control_runtime
+
+        updated = apply_primary_control_config(
+            (self.primary / "config.toml").read_text(encoding="utf-8"),
+            control,
+            official_version="26.new",
+            browser_client_hash="fresh-browser-hash",
+        )
+
+        self.assertIn(f'command = "{control.primary_node_repl}"', updated)
+        self.assertNotIn(f'command = "{control.node_repl}"', updated)
+
     def test_primary_control_config_restores_helper_socket_and_primary_home(
         self,
     ) -> None:
@@ -521,7 +627,7 @@ BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"
             browser_client_hash="fresh-browser-hash",
         )
 
-        self.assertIn(f'command = "{control.node_repl}"', updated)
+        self.assertIn(f'command = "{control.primary_node_repl}"', updated)
         self.assertIn(
             f'NODE_REPL_NODE_MODULE_DIRS = "{control.official_node_modules}"',
             updated,
