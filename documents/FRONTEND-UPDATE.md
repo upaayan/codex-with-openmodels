@@ -135,48 +135,66 @@ signature match the installed app. The compact Computer Use wrapper/service
 rollback is under
 `dist/transactions/computer-use-direct-child-20260811-003543`.
 
-## Shared-primary Computer Use repair — 2026-08-15
+## Shared-primary Computer Use boundary — 2026-08-16
 
 The standard ChatGPT frontend now launches against the shared primary state at
 `~/.sudhir-codex`; `~/.sudhir-codex-chatgpt` remains only the preserved legacy
 frontend/runtime location. The current bundled Computer Use plugin is
 `1.0.1000717`.
 
-The official `26.810.41047` Computer Use client speaks
+The official `26.810.52044` Computer Use client speaks
 `CodexComputerUseIPC-3`, while the installed signed Sudhir helper intentionally
-still speaks `CodexComputerUseIPC-2`. The primary plugin wrapper must therefore
-load the preserved IPC-2 `create_client.js` from
+still speaks `CodexComputerUseIPC-2`. The stable wrapper therefore loads the
+preserved IPC-2 `create_client.js` from
 `~/.sudhir-codex-chatgpt/frontend-control-runtime/legacy-cua`, not the current
-official `@oai/cua` client. The active wrapper SHA-256 is
+official `@oai/cua` client. The stable wrapper SHA-256 is
 `f92046877983b72c9b1f8dbafcb87640b6adb6482563a0c0db2b02a027414a6b`.
 
-`ensure-primary` is the upgrade-survival boundary. On every primary frontend
-launch it synchronizes before starting the app and again after the app-server
-appears, because startup may install a new plugin version. The synchronizer:
+The earlier 2026-08-15 repair used a fixed 1.5-second post-launch rewrite. The
+`26.810.52044` frontend wrote its upstream helper settings three seconds after
+launch, so that timer did not protect the live harness. The timer is not part
+of the durable boundary.
 
-- patches every installed primary Computer Use plugin version;
-- restores the plugin-owned wrapper and Bootstrap instructions;
-- restores both `SKY_CUA_*` and patched-client `SUDHIR_CUA_*` helper/socket
-  settings;
-- preserves `CODEX_HOME=/Users/sudhirjha/.sudhir-codex`;
-- fails closed when the signed helper, broker, node runtime, or plugin assets
-  are missing or incompatible.
+The upgrade-survival boundary is now owned outside frontend-managed config and
+plugin caches:
+
+- `~/.sudhir-codex/control/bin/sudhir-primary-node-repl` overrides poisoned or
+  missing frontend values before it executes the signed legacy `node_repl`;
+- `~/.sudhir-codex/control/computer-use-client.mjs` is the stable IPC-2 wrapper;
+- `~/.sudhir-codex/skills/computer-use/SKILL.md` imports that stable wrapper;
+- `CODEX_NODE_REPL_PATH` and `[mcp_servers.node_repl].command` both select the
+  shim, so the frontend reinforces the same command during plugin refresh;
+- plugin-cache patches remain compatibility copies only and are not required
+  for the stable skill to work.
+
+The shim SHA-256 is
+`8f1dc3cc46c79eab0fdf03174c744eefb7fce6bac9a56bfdb95987a93f59c018`.
+It supplies `CODEX_HOME=/Users/sudhirjha/.sudhir-codex`, the preserved Node
+runtime, trusted-code roots, and both `SKY_CUA_*` and `SUDHIR_CUA_*` helper and
+socket settings at the executable boundary.
 
 Before accepting a frontend or backend upgrade, run:
 
 ```bash
 cd ~/.playground/sudhir-codex
-python3 scripts/tests/sudhir_targeted_regressions.py gateway
+.venv/bin/python scripts/tests/sudhir_targeted_regressions.py gateway
 
 cd ~/.playground/sudhir-codex-app
 node --test tests/transition-launcher-source.test.mjs
 scripts/verify-control-components build <new-control-build-directory>
+SUDHIR_CONTROL_BUILD_DIR=dist/control-components-test-20260807-1 \
+SUDHIR_CONTROL_TEST_CUA_LAUNCH=1 \
+node --test --test-concurrency=1 \
+  --test-name-pattern='stable primary Computer Use boundary ignores poisoned frontend environment' \
+  tests/control-components.integration.test.mjs
 ```
 
-The final runtime acceptance is a fresh-process, read-only Computer Use
-bootstrap through the installed plugin wrapper followed by `sky.list_apps()`.
-The 2026-08-15 acceptance returned 139 applications and included the running
-`com.sudhir.codex.tauri`.
+The integration gate deliberately supplies wrong `CODEX_HOME`, Node, helper,
+socket, and trusted-code values. It passes only when the installed shim
+overrides them and `sky.list_apps()` succeeds through the stable wrapper. Final
+runtime acceptance must additionally use the real post-restart harness. That
+acceptance passed on 2026-08-16: the harness reported 138 applications and
+confirmed that `com.sudhir.codex.tauri` was present.
 
 The owner-approved cleanup on 2026-08-11 removed 50 obsolete top-level
 artifacts: 25 redundant app rollbacks, 11 abandoned candidates, 6 completed

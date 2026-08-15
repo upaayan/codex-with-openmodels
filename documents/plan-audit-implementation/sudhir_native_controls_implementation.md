@@ -106,12 +106,27 @@ Computer Use regressions:
    `CodexComputerUseIPC-3`, while the signed Sudhir helper remained on the
    validated `CodexComputerUseIPC-2` contract.
 
-The repair keeps the unified primary `CODEX_HOME` and preserves the physical
-legacy runtime path as intentional frontend infrastructure. `ensure-primary`
-now synchronizes Computer Use before launch and again after app-server startup.
-It patches every installed primary plugin version, restores the primary config
-atomically, and installs the plugin wrapper and instructions from durable
-generated assets under `~/.sudhir-codex/control`.
+The initial repair kept the unified primary `CODEX_HOME` and preserved the
+physical legacy runtime path as intentional frontend infrastructure. It also
+used a fixed 1.5-second post-launch synchronization. On 2026-08-16 the
+`26.810.52044` frontend rewrote its helper settings approximately three seconds
+after launch. The live app-server then spawned `node_repl` with the upstream
+helper path and no native-pipe socket even though the isolated integration
+client passed. This proved the timer and plugin-owned wrapper were not a
+durable boundary.
+
+The corrected implementation moves authority to stable harness-owned files:
+
+- `~/.sudhir-codex/control/bin/sudhir-primary-node-repl` overrides frontend
+  environment values and executes the preserved signed legacy `node_repl`;
+- `~/.sudhir-codex/control/computer-use-client.mjs` loads the matching IPC-2
+  client and starts the helper directly;
+- `~/.sudhir-codex/skills/computer-use/SKILL.md` imports the stable wrapper
+  without deriving a versioned plugin path;
+- primary config and `CODEX_NODE_REPL_PATH` both select the stable shim.
+
+Plugin-cache copies are retained only for compatibility. Runtime correctness
+no longer depends on their survival or on a post-launch delay.
 
 The primary wrapper deliberately uses the preserved patched IPC-2 client and
 direct-child helper launch. Current live values are:
@@ -119,15 +134,20 @@ direct-child helper launch. Current live values are:
 - plugin: `1.0.1000717`;
 - wrapper SHA-256:
   `f92046877983b72c9b1f8dbafcb87640b6adb6482563a0c0db2b02a027414a6b`;
+- stable shim SHA-256:
+  `8f1dc3cc46c79eab0fdf03174c744eefb7fce6bac9a56bfdb95987a93f59c018`;
+- local skill SHA-256:
+  `524124456cda23a06b718cee4961effceb506d82ba94c0fbac3cc191117f3b93`;
 - helper: `~/.sudhir-codex/control/Sudhir Computer Use.app`;
 - socket: `~/.sudhir-codex/control/run/computer-use.sock`;
 - `CODEX_HOME`: `~/.sudhir-codex`;
 - repair rollback:
   `dist/transactions/computer-use-primary-home-repair-20260815-225522`.
 
-The backend targeted gateway manifest includes the primary pre/post-launch
-synchronization, matched legacy-wrapper, and config-restoration regressions.
-The frontend source gate rejects a return to direct `@oai/cua`, and the real
-control-component integration test exercises `list_apps()` through the
-preserved IPC-2 client. A fresh live acceptance returned 139 applications and
-included the running `com.sudhir.codex.tauri`.
+The backend targeted gateway manifest covers shim environment enforcement,
+stable local-skill bootstrap, primary command selection, matched IPC-2 wrapper,
+and config restoration. The frontend source gate rejects a return to direct
+`@oai/cua`. Its live integration test deliberately poisons every frontend-owned
+runtime value and requires `list_apps()` to succeed through the installed shim
+and stable wrapper. The real post-restart harness acceptance then passed on
+2026-08-16 with 138 applications and `com.sudhir.codex.tauri` present.

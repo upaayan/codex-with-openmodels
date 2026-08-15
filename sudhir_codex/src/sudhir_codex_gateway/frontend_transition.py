@@ -186,7 +186,7 @@ def launch_primary(paths: TransitionPaths) -> None:
         "--env",
         "CODEX_APP_SERVER_FORCE_CLI=1",
         "--env",
-        f"CODEX_NODE_REPL_PATH={control.node_repl}",
+        f"CODEX_NODE_REPL_PATH={control.primary_node_repl}",
         "--env",
         f"CODEX_BROWSER_USE_NODE_PATH={control.node}",
         "--env",
@@ -203,10 +203,6 @@ def launch_primary(paths: TransitionPaths) -> None:
         f"--user-data-dir={paths.profile}",
     ]
     subprocess.run(command, check=True)
-    if _wait_for_app_server(paths, timeout_seconds=20):
-        # The app may install a newer bundled Computer Use plugin during startup.
-        time.sleep(1.5)
-        sync_primary_control_runtime(paths)
 
 
 def _process_rows() -> list[tuple[int, int, str]]:
@@ -404,6 +400,7 @@ def ensure_primary(paths: TransitionPaths) -> dict[str, Any]:
 
     current = status_primary(paths)
     if _healthy_primary_status(current):
+        sync_primary_control_runtime(paths)
         _activate_chatgpt(paths)
         return {**current, "launcherAction": "activated"}
 

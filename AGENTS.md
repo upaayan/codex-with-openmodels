@@ -1,17 +1,17 @@
 # Sudhir-Codex Computer Use
 
-When a task requires Computer Use, use the installed `computer-use:computer-use`
-skill and follow its bootstrap instructions. The model must not choose or infer a
-native helper path itself.
+When a task requires Computer Use, use the Codex-local `computer-use` skill at
+`~/.sudhir-codex/skills/computer-use/SKILL.md`. It is the stable harness-owned
+entrypoint; plugin-cache skills are compatibility copies and are not the
+authority for Sudhir-Codex.
 
-1. Read the installed Computer Use `SKILL.md` completely.
-2. Derive the plugin root from that skill's path and load its
-   `scripts/computer-use-client.mjs` wrapper in `node_repl`:
+1. Read the Codex-local Computer Use `SKILL.md` completely.
+2. Load the stable wrapper in `node_repl` exactly as prescribed there:
 
    ```js
    if (!globalThis.sky) {
      const { setupComputerUseRuntime } = await import(
-       "<plugin root>/scripts/computer-use-client.mjs"
+       "/Users/sudhirjha/.sudhir-codex/control/computer-use-client.mjs"
      );
      await setupComputerUseRuntime({ globals: globalThis });
    }
@@ -20,10 +20,13 @@ native helper path itself.
 3. Use the resulting `sky` API, such as `await sky.list_apps()` or
    `await sky.get_app_state(...)`.
 
-Do not import `@oai/sky` directly, invoke the generic Computer Use MCP launcher,
-or substitute `~/.codex` paths. Sudhir-Codex owns the runtime configuration and
-must supply `CODEX_HOME=~/.sudhir-codex`, `SKY_CUA_SERVICE_PATH`, and
-`SKY_CUA_SERVICE_NATIVE_PIPE_PATH` to the trusted `node_repl` runtime.
+Do not import `@oai/sky` directly, derive a wrapper from a versioned plugin
+directory, invoke the generic Computer Use MCP launcher, or substitute
+`~/.codex` paths. The configured command must be the harness-owned
+`~/.sudhir-codex/control/bin/sudhir-primary-node-repl` shim. That shim, rather
+than frontend-managed config values, supplies `CODEX_HOME=~/.sudhir-codex` and
+the `SKY_CUA_*` / `SUDHIR_CUA_*` helper and socket settings to the trusted
+runtime.
 
 The model-visible `nodeRepl.env` object may be empty, frozen, or otherwise
 restricted. Do not treat that view as proof that the actual `node_repl` process

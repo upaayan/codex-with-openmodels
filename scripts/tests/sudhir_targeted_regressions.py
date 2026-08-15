@@ -13,8 +13,11 @@ from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 GATEWAY_TESTS = (
-    "test_frontend_transition.FrontendTransitionTests.test_launch_primary_syncs_primary_computer_use_before_and_after_launch",
+    "test_frontend_transition.FrontendTransitionTests.test_launch_primary_provisions_stable_computer_use_before_launch",
     "test_frontend_transition.FrontendTransitionTests.test_primary_wrapper_uses_matching_legacy_client_and_starts_helper",
+    "test_frontend_transition.FrontendTransitionTests.test_primary_node_repl_shim_overrides_poisoned_frontend_environment",
+    "test_frontend_transition.FrontendTransitionTests.test_primary_local_skill_uses_stable_wrapper_outside_plugin_cache",
+    "test_frontend_transition.FrontendTransitionTests.test_primary_control_config_points_to_stable_node_repl_shim",
     "test_frontend_transition.FrontendTransitionTests.test_primary_control_config_restores_helper_socket_and_primary_home",
     "test_catalog.CatalogTests.test_synthesized_model_is_picker_and_agent_visible",
     "test_catalog.CatalogTests.test_chat_completion_models_enable_gateway_tool_search",

@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -110,6 +111,18 @@ class ControlRuntimePaths:
     @property
     def broker(self) -> Path:
         return self.primary_state / "control" / "bin" / "sudhir-chrome-broker"
+
+    @property
+    def primary_node_repl(self) -> Path:
+        return self.primary_state / "control" / "bin" / "sudhir-primary-node-repl"
+
+    @property
+    def primary_wrapper(self) -> Path:
+        return self.primary_state / "control" / "computer-use-client.mjs"
+
+    @property
+    def primary_skill(self) -> Path:
+        return self.primary_state / "skills" / "computer-use" / "SKILL.md"
 
     @property
     def source_node_repl(self) -> Path:
@@ -448,6 +461,33 @@ def _primary_wrapper_text(paths: ControlRuntimePaths) -> str:
     return _wrapper_text(paths)
 
 
+def _primary_node_repl_shim_text(paths: ControlRuntimePaths) -> str:
+    trusted_paths = f"{paths.primary_state}:{paths.official_node_modules}"
+    values = (
+        ("CODEX_HOME", paths.primary_state),
+        ("NODE_REPL_NODE_MODULE_DIRS", paths.official_node_modules),
+        ("NODE_REPL_NODE_PATH", paths.node),
+        ("NODE_REPL_TRUSTED_CODE_PATHS", trusted_paths),
+        (_UPSTREAM_SERVICE_PATH_KEY, paths.helper),
+        (_UPSTREAM_SOCKET_PATH_KEY, paths.socket),
+        (_TRANSITION_SERVICE_PATH_KEY, paths.helper),
+        (_TRANSITION_SOCKET_PATH_KEY, paths.socket),
+        ("SUDHIR_PRIMARY_CUA_RUNTIME", "1"),
+    )
+    exports = [
+        f"export {key}={shlex.quote(str(value))}" for key, value in values
+    ]
+    return "\n".join(
+        (
+            "#!/bin/sh",
+            "set -eu",
+            *exports,
+            f'exec {shlex.quote(str(paths.node_repl))} "$@"',
+            "",
+        )
+    )
+
+
 def _rewrite_instructions(source: str) -> str:
     replacement = '''## Bootstrap
 
@@ -473,6 +513,30 @@ if (!globalThis.sky) {
         raise ControlRuntimeError("Computer Use plugin has no recognised Bootstrap section")
     if 'import("@oai/sky")' in updated or "import('@oai/sky')" in updated:
         raise ControlRuntimeError("Computer Use instructions still import @oai/sky directly")
+    return updated
+
+
+def _rewrite_primary_skill(source: str, paths: ControlRuntimePaths) -> str:
+    replacement = f'''## Bootstrap
+
+Load Computer Use through the harness-owned stable wrapper. Do not import
+`@oai/sky` directly and do not derive a wrapper from the plugin cache.
+
+```js
+if (!globalThis.sky) {{
+  const {{ setupComputerUseRuntime }} = await import(
+    {json.dumps(str(paths.primary_wrapper))}
+  );
+  await setupComputerUseRuntime({{ globals: globalThis }});
+}}
+```
+
+'''
+    updated, count = _BOOTSTRAP.subn(replacement, source, count=1)
+    if count != 1:
+        raise ControlRuntimeError("Computer Use skill has no recognised Bootstrap section")
+    if 'import("@oai/sky")' in updated or "import('@oai/sky')" in updated:
+        raise ControlRuntimeError("Computer Use skill still imports @oai/sky directly")
     return updated
 
 
@@ -566,10 +630,26 @@ def _prepare_primary_plugin_assets(paths: ControlRuntimePaths) -> PluginAssets:
     state = paths.primary_state
     if not _plugin_roots(state):
         raise ControlRuntimeError("Primary state has no installed Computer Use plugin")
+    wrapper = _primary_wrapper_text(paths).encode("utf-8")
+    _write_atomic(paths.primary_wrapper, wrapper, mode=0o600)
+    skill_template = _instruction_template(state, PLUGIN_FILES[2])
+    _write_atomic(
+        paths.primary_skill,
+        _rewrite_primary_skill(
+            skill_template.read_text(encoding="utf-8"),
+            paths,
+        ).encode("utf-8"),
+        mode=0o600,
+    )
+    _write_atomic(
+        paths.primary_node_repl,
+        _primary_node_repl_shim_text(paths).encode("utf-8"),
+        mode=0o700,
+    )
     assets = _asset_paths(state / "control" / PLUGIN_ASSETS_NAME)
     _write_atomic(
         assets.wrapper,
-        _primary_wrapper_text(paths).encode("utf-8"),
+        wrapper,
         mode=0o600,
     )
     for relative, destination in (
@@ -604,10 +684,16 @@ def provision_primary_control_runtime(paths: ControlRuntimePaths) -> dict[str, A
     )
     return {
         **component_metadata,
-        "controlNodeRepl": str(paths.node_repl),
+        "controlNodeRepl": str(paths.primary_node_repl),
+        "controlLegacyNodeRepl": str(paths.node_repl),
         "controlNode": str(paths.node),
         "controlHelper": str(paths.helper),
         "controlSocket": str(paths.socket),
+        "controlStableWrapper": str(paths.primary_wrapper),
+        "controlStableSkill": str(paths.primary_skill),
+        "controlPrimaryNodeReplSha256": _sha256(paths.primary_node_repl),
+        "controlStableWrapperSha256": _sha256(paths.primary_wrapper),
+        "controlStableSkillSha256": _sha256(paths.primary_skill),
         "controlPluginVersions": plugin_versions,
         "controlPluginWrapperSha256": _sha256(assets.wrapper),
     }
@@ -809,7 +895,12 @@ def apply_primary_control_config(
 
     trusted_paths = f"{paths.primary_state}:{paths.official_node_modules}"
     values = (
-        ("mcp_servers.node_repl", "command", str(paths.node_repl), None),
+        (
+            "mcp_servers.node_repl",
+            "command",
+            str(paths.primary_node_repl),
+            None,
+        ),
         (
             "mcp_servers.node_repl.env",
             "NODE_REPL_NODE_MODULE_DIRS",
