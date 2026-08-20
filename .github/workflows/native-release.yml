@@ -79,6 +79,12 @@ jobs:
             --bin codex-code-mode-host \
             --bin codex-responses-api-proxy
 
+      - name: Verify model-picker persistence in built app-server
+        shell: bash
+        run: |
+          python3 "${GITHUB_WORKSPACE}/scripts/tests/sudhir_app_server_artifact.py" \
+            target/aarch64-apple-darwin/release/codex
+
       - name: Strip, ad-hoc sign, and smoke-test
         shell: bash
         run: |
@@ -175,18 +181,6 @@ jobs:
         with:
           target: x86_64-unknown-linux-musl
 
-      - name: Build, strip, and hash bundled bwrap
-        shell: bash
-        run: |
-          set -euo pipefail
-          target="x86_64-unknown-linux-musl"
-          cargo build --locked --target "$target" --release --bin bwrap
-          bwrap="target/${target}/release/bwrap"
-          strip --strip-debug --strip-unneeded "$bwrap"
-          digest="$(sha256sum "$bwrap" | awk '{print $1}')"
-          echo "CODEX_BWRAP_SHA256=$digest" >> "$GITHUB_ENV"
-          echo "Bundled bwrap sha256:$digest"
-
       - name: Build required Linux binaries
         shell: bash
         run: |
@@ -197,7 +191,24 @@ jobs:
             --release \
             --bin codex \
             --bin codex-code-mode-host \
-            --bin codex-responses-api-proxy
+            --bin codex-responses-api-proxy \
+            --bin bwrap
+
+      - name: Verify model-picker persistence in built app-server
+        shell: bash
+        run: |
+          python3 "${GITHUB_WORKSPACE}/scripts/tests/sudhir_app_server_artifact.py" \
+            target/x86_64-unknown-linux-musl/release/codex
+
+      - name: Strip and hash bundled bwrap
+        shell: bash
+        run: |
+          set -euo pipefail
+          bwrap="target/x86_64-unknown-linux-musl/release/bwrap"
+          strip --strip-debug --strip-unneeded "$bwrap"
+          digest="$(sha256sum "$bwrap" | awk '{print $1}')"
+          echo "CODEX_BWRAP_SHA256=$digest" >> "$GITHUB_ENV"
+          echo "Bundled bwrap sha256:$digest"
 
       - name: Strip, stage, and smoke-test
         shell: bash
@@ -278,6 +289,7 @@ jobs:
       - tag-check
       - macos
       - ubuntu
+      - post-build-rust-source-checks
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     permissions:
@@ -345,3 +357,21 @@ jobs:
               --notes "Owner-validation candidate built once for macOS arm64 and Linux x64 MUSL. Verify SHA256SUMS before testing. Windows runs the Linux x64 MUSL backend inside WSL2." \
               release-assets/*
           fi
+
+  post-build-rust-source-checks:
+    name: Rust source checks after native builds
+    needs:
+      - macos
+      - ubuntu
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: rustfmt
+      - name: Check Rust formatting without compiling
+        working-directory: codex-rs
+        run: cargo fmt --all -- --check

@@ -437,13 +437,13 @@ always = false
 
 [[contract]]
 id = "SC-TUI-003"
-behavior = "Model or effort changes affect only the active task; app-server batch writes retain unrelated settings without rewriting defaults"
+behavior = "Active-task changes stay thread-scoped; new-task picker writes persist as future new-task defaults"
 patch = "fork[tui]"
 source = ["codex-rs/tui/src/app/config_persistence.rs", "codex-rs/tui/src/app/event_dispatch.rs", "codex-rs/app-server/src/request_processors/config_processor.rs"]
 test_file = "codex-rs/app-server/tests/suite/v2/sudhir_active_task_config.rs"
 test_runner = "rust-nextest"
-test_name = "active_selection_never_rewrites_new_task_defaults"
-acceptance_case = "active-task-only-config"
+test_name = "new_task_selection_updates_new_task_defaults"
+acceptance_case = "new-task-default-persistence"
 acceptance_mode = "ci"
 acceptance_hosts = ["github-linux"]
 lane = "tui-app-server"

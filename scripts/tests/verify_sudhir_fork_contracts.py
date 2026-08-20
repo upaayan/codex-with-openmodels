@@ -164,7 +164,7 @@ def lint(path: Path, platform: str | None) -> dict[str, Any]:
     required_rust_commands = (
         "just test -p codex-tui picker_searches_merged_model_names_and_providers",
         "just test -p codex-tui max_and_ultra_are_visible_and_keyboard_reachable",
-        "just test -p codex-app-server active_selection_never_rewrites_new_task_defaults",
+        "just test -p codex-app-server new_task_selection_updates_new_task_defaults",
     )
     for command in required_source_commands:
         if source_workflow.count(command) != 1:

@@ -13,7 +13,7 @@ use tokio::time::timeout;
 const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn active_selection_never_rewrites_new_task_defaults() -> Result<()> {
+async fn new_task_selection_updates_new_task_defaults() -> Result<()> {
     let temp = TempDir::new()?;
     let codex_home = temp.path().canonicalize()?;
     std::fs::write(
@@ -50,7 +50,7 @@ model_reasoning_effort = "high"
         .await?;
     let picker_response: ConfigWriteResponse =
         timeout(READ_TIMEOUT, app.read_response(picker_request_id)).await??;
-    assert_eq!(picker_response.status, WriteStatus::OkOverridden);
+    assert_eq!(picker_response.status, WriteStatus::Ok);
 
     let mixed_request_id = app
         .send_config_batch_write_request(ConfigBatchWriteParams {
@@ -82,8 +82,8 @@ model_reasoning_effort = "high"
 
     let config: toml::Value =
         toml::from_str(&std::fs::read_to_string(codex_home.join("config.toml"))?)?;
-    assert_eq!(config["model"].as_str(), Some("gpt-default"));
-    assert_eq!(config["model_reasoning_effort"].as_str(), Some("high"));
+    assert_eq!(config["model"].as_str(), Some("pi-deepseek/v4-flash"));
+    assert_eq!(config["model_reasoning_effort"].as_str(), Some("ultra"));
     assert_eq!(config["personality"].as_str(), Some("pragmatic"));
     Ok(())
 }
