@@ -1046,7 +1046,7 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn config_batch_write_keeps_model_defaults_while_writing_other_settings() -> Result<()> {
+async fn config_batch_write_updates_model_defaults_and_other_settings() -> Result<()> {
     let tmp_dir = TempDir::new()?;
     let codex_home = tmp_dir.path().canonicalize()?;
     write_config(
@@ -1093,8 +1093,8 @@ model_reasoning_effort = "high"
 
     let config: toml::Value =
         toml::from_str(&std::fs::read_to_string(codex_home.join("config.toml"))?)?;
-    assert_eq!(config["model"].as_str(), Some("gpt-default"));
-    assert_eq!(config["model_reasoning_effort"].as_str(), Some("high"));
+    assert_eq!(config["model"].as_str(), Some("pi-deepseek/v4-flash"));
+    assert_eq!(config["model_reasoning_effort"].as_str(), Some("ultra"));
     assert_eq!(config["personality"].as_str(), Some("pragmatic"));
 
     Ok(())
