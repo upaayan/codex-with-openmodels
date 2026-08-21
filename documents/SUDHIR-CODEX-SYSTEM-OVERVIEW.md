@@ -79,6 +79,7 @@ used by that frontend; it does not copy or edit the official application.
 | `~/.sudhir-codex/model-visibility.json` | Sudhir-Codex | Controls which catalog models are shown | Does not control whether a UI selection persists |
 | `~/.sudhir-codex/.codex-global-state.json` | Frontend state | Remembers desktop UI/global state | May be rewritten by the frontend |
 | `~/.sudhir-codex/gateway` | Sudhir-Codex | Provider routing logs and runtime state | Written by the gateway |
+| `sudhir_codex/src/sudhir_codex_gateway/` | Sudhir-Codex | Python gateway source; translates Responses <-> provider APIs, route discovery, auth | Git-tracked in `~/.playground/sudhir-codex`; survives ChatGPT upgrades |
 
 At the last verification, the official app was version `26.814.41407`, build
 `6720`, bundle ID `com.openai.codex`. The small launcher was version `1.0.0`,
@@ -343,6 +344,30 @@ Mac activation and GUI acceptance are complete. In a fresh GPT draft, selecting
 
 WSL has not been changed or validated yet. Its activation is a separate owner-
 approved step using the Linux artifact from the same release candidate.
+
+### 4.7 Gateway source is git-protected, not app-protected
+
+The Sudhir gateway is Python source in `~/.playground/sudhir-codex`, which is
+separate from `/Applications/ChatGPT.app`. An official ChatGPT upgrade replaces
+only files inside the app bundle and never touches the gateway source. The
+Sudhir desktop uses the same gateway on `127.0.0.1:32179`, so any gateway change
+is shared by both dsh and the Sudhir app.
+
+Gateway changes are protected by git, not by the launcher. A change is only
+durable once it is committed and pushed. Restore a committed gateway change
+with:
+
+```bash
+git -C ~/.playground/sudhir-codex checkout <commit> -- \
+  sudhir_codex/src/sudhir_codex_gateway/<file>
+```
+
+Known gateway changes to preserve:
+
+- `b80c38232` — accept chat-style untyped message items from pi-ai (dsh); also
+  normalizes string `content`. Fixes `unsupported_input_item` and
+  `invalid_content` for non-Cursor open models reached through dsh.
+- `9beedfbf6` — accept `Authorization: Bearer` for dsh credential injection.
 
 The objective is not to make updates impossible. It is to make the known
 failure classes recognizable and recoverable in minutes, with a clear stop

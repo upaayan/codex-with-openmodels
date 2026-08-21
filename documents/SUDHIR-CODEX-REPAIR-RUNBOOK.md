@@ -628,6 +628,12 @@ Only after the failing layer is established should source or tests be touched.
 If a gateway source change is actually required, run only the named focused
 gateway regression tests. If Rust source is unchanged, do not build Rust.
 
+The gateway runs Python source in `~/.playground/sudhir-codex`, which is
+separate from `/Applications/ChatGPT.app`. An official ChatGPT upgrade never
+replaces it. Protect gateway changes with git, not the launcher: verify the
+commit is pushed before considering it durable. Restore a committed gateway
+change with `git checkout <commit> -- <file>`.
+
 ## 8. App-server or gateway is not running
 
 ### 8.1 Verify required executables and state
