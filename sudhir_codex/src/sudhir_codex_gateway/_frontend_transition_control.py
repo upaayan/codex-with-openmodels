@@ -929,7 +929,7 @@ def apply_primary_control_config(
             "mcp_servers.node_repl.env",
             "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S",
             browser_client_hash,
-            None,
+            "NODE_REPL_TRUSTED_CODE_PATHS",
         ),
         (
             "mcp_servers.node_repl.env",
@@ -965,7 +965,7 @@ def apply_primary_control_config(
             "shell_environment_policy.set",
             "NODE_REPL_TRUSTED_CODE_PATHS",
             trusted_paths,
-            None,
+            "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S",
         ),
         (
             "shell_environment_policy.set",

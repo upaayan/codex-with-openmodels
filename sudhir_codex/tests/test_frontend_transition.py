@@ -648,6 +648,41 @@ Keep this API text.
         self.assertEqual(updated.count("fresh-browser-hash"), 2)
         self.assertIn('BROWSER_USE_CODEX_APP_VERSION = "26.new"', updated)
 
+    def test_primary_control_config_recreates_frontend_removed_trust_entries(
+        self,
+    ) -> None:
+        source = (self.primary / "config.toml").read_text(encoding="utf-8")
+        source = source.replace(
+            'NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S = "old-browser-hash"\n',
+            "",
+            1,
+        ).replace(
+            "[shell_environment_policy.set]\n"
+            f'NODE_REPL_TRUSTED_CODE_PATHS = "{self.primary}"\n',
+            "[shell_environment_policy.set]\n",
+            1,
+        )
+        control = self.paths.control_runtime
+
+        updated = apply_primary_control_config(
+            source,
+            control,
+            official_version="26.new",
+            browser_client_hash="fresh-browser-hash",
+        )
+
+        trusted_paths = f"{self.primary}:{control.official_node_modules}"
+        self.assertEqual(
+            updated.count(f'NODE_REPL_TRUSTED_CODE_PATHS = "{trusted_paths}"'),
+            2,
+        )
+        self.assertEqual(
+            updated.count(
+                'NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S = "fresh-browser-hash"'
+            ),
+            2,
+        )
+
     def test_native_pipe_rewrite_uses_transition_specific_environment(self) -> None:
         source = (
             'const a="SKY_CUA_SERVICE_PATH";const b="SKY_CUA_SERVICE_NATIVE_PIPE_PATH";'
