@@ -1,3 +1,4 @@
+import base64
 import json
 import tempfile
 import unittest
@@ -145,6 +146,89 @@ class AdapterTests(unittest.TestCase):
             {"shell_command", "apply_patch", "multi_agent_v1.spawn_agent"},
         )
 
+    def test_native_google_signature_carrier_survives_tool_loop_translation(
+        self,
+    ) -> None:
+        document = {
+            "providers": {
+                "google": {
+                    "api": "google-generative-ai",
+                    "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+                    "models": [{"id": "gemini-3.7-flash", "reasoning": True}],
+                }
+            }
+        }
+        write_json(self.pi / "models.json", document)
+        model = (
+            CatalogLoader(
+                self.pi / "models.json",
+                self.repo / "codex-rs" / "models-manager" / "prompt.md",
+            )
+            .load()
+            .models[0]
+        )
+        envelope = {
+            "v": 1,
+            "api": model.api,
+            "provider": model.provider_id,
+            "model": model.upstream_id,
+            "parts": [],
+        }
+        carrier = "sudhir-google-signature-v1." + base64.urlsafe_b64encode(
+            json.dumps(envelope, separators=(",", ":")).encode()
+        ).decode().rstrip("=")
+        first_request = self.request()
+        first_request["model"] = model.gateway_id
+        _chat, bindings = responses_to_chat_request(first_request, model)
+        sse = chat_response_to_sse(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "reasoning_signature": carrier,
+                            "tool_calls": [
+                                {
+                                    "id": "call-1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "shell_command",
+                                        "arguments": '{"command":"pwd"}',
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            },
+            bindings,
+        )
+        output = [
+            event["item"]
+            for event in response_events(sse)
+            if event.get("type") == "response.output_item.done"
+        ]
+        self.assertEqual(output[0]["encrypted_content"], carrier)
+        self.assertEqual(output[0]["content"], [])
+
+        follow_up = self.request()
+        follow_up["model"] = model.gateway_id
+        follow_up["input"] = [
+            *output,
+            {
+                "type": "function_call_output",
+                "call_id": "call-1",
+                "output": "ok",
+            },
+        ]
+        chat, _bindings = responses_to_chat_request(follow_up, model)
+
+        self.assertEqual(chat["messages"][1]["reasoning_signature"], carrier)
+
+        switched, _bindings = responses_to_chat_request(follow_up, self.model)
+        self.assertNotIn("reasoning_signature", switched["messages"][1])
+
     def test_chat_loads_only_eight_latest_discovered_tools(self) -> None:
         request = self.request()
         request["tools"] = [
@@ -261,6 +345,29 @@ class AdapterTests(unittest.TestCase):
             [child["name"] for child in visible[0]["tools"]],
             [f"leaf_{index}" for index in range(8)],
         )
+
+    def test_chat_style_message_items_without_type_are_accepted(self) -> None:
+        # pi-ai (dsh) emits chat-style items as {role, content} with no
+        # Responses "type", and may carry content as a plain string (e.g. the
+        # system prompt). Ensure _translate_input treats those as messages
+        # instead of raising unsupported_input_item / invalid_content.
+        request = self.request()
+        request["instructions"] = None
+        request["input"] = [
+            {"role": "system", "content": "You are helpful."},
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+        ]
+
+        chat, _bindings = responses_to_chat_request(request, self.model)
+
+        messages = chat["messages"]
+        system_messages = [m for m in messages if m["role"] == "system"]
+        self.assertEqual(system_messages[0]["content"], "You are helpful.")
+        user_messages = [m for m in messages if m["role"] == "user"]
+        self.assertEqual(user_messages[0]["content"], "hi")
+        assistant_messages = [m for m in messages if m["role"] == "assistant"]
+        self.assertEqual(assistant_messages[0]["content"], "hello")
 
     def test_direct_deepseek_translates_none_high_and_max(self) -> None:
         model = self.load_model(
