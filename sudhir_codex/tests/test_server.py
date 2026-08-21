@@ -145,6 +145,20 @@ class GatewayServerTests(unittest.TestCase):
         self.assertEqual(json.loads(body), {"ok": True})
         self.assertEqual(self.app.health_calls, 1)
 
+    def test_authorized_health_request_with_bearer_header(self) -> None:
+        connection = http.client.HTTPConnection(LOOPBACK_HOST, self.port, timeout=3)
+        try:
+            connection.request(
+                "GET",
+                "/healthz",
+                headers={"Authorization": "Bearer local-secret"},
+            )
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(json.loads(response.read()), {"ok": True})
+        finally:
+            connection.close()
+
     def test_threaded_server_handles_concurrent_requests(self) -> None:
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
             results = list(
