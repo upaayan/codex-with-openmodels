@@ -149,19 +149,24 @@ browser_path = Path(
 config = tomllib.loads(config_path.read_text(encoding='utf-8'))
 expected = hashlib.sha256(browser_path.read_bytes()).hexdigest()
 
-checks = [
-    ('mcp_servers.node_repl.env',
-     config.get('mcp_servers', {}).get('node_repl', {}).get('env', {})),
-    ('shell_environment_policy.set',
-     config.get('shell_environment_policy', {}).get('set', {})),
-]
-failed = False
-for table_name, table in checks:
-    trusted_paths = table.get('NODE_REPL_TRUSTED_CODE_PATHS')
-    hashes = str(table.get('NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S', '')).split(',')
-    ok = bool(trusted_paths) and expected in hashes
-    print(f'{table_name}: {"PASS" if ok else "FAIL"}')
-    failed = failed or not ok
+# Build 6849+ rewrites config.toml a few seconds after launch and replaces
+# mcp_servers.node_repl.env with its own block that omits the browser hash.
+# The launcher recreates both trust entries at the next launch, so:
+#   - shell_environment_policy.set is authoritative and must contain the hash;
+#   - mcp_servers.node_repl.env must keep the NODE_REPL_TRUSTED_CODE_PATHS
+#     anchor, but its browser-hash key may be absent on disk after launch.
+shell_policy = config.get('shell_environment_policy', {}).get('set', {})
+shell_hashes = str(shell_policy.get('NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S', '')).split(',')
+print(f'shell_environment_policy.set: {"PASS" if expected in shell_hashes else "FAIL"}')
+failed = expected not in shell_hashes
+
+node_env = config.get('mcp_servers', {}).get('node_repl', {}).get('env', {})
+anchor_ok = bool(node_env.get('NODE_REPL_TRUSTED_CODE_PATHS'))
+print(f'mcp_servers.node_repl.env anchor: {"PASS" if anchor_ok else "FAIL"}')
+failed = failed or not anchor_ok
+node_hashes = str(node_env.get('NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S', '')).split(',')
+if expected not in node_hashes:
+    print('mcp_servers.node_repl.env hash: EXPECTED-ABSENT (frontend rewrote it; launcher recreates at launch)')
 
 command = config.get('mcp_servers', {}).get('node_repl', {}).get('command')
 shim = '/Users/sudhirjha/.sudhir-codex/control/bin/sudhir-primary-node-repl'
@@ -180,6 +185,16 @@ At the 20 August recovery point, the official Browser client SHA-256 was:
 
 Do not hard-code that value after an official ChatGPT update. The validation
 script derives the current value from the signed installed official app.
+
+For official ChatGPT `26.818.21641` build `6849`, the current Browser client
+SHA-256 is:
+
+```text
+53484b46feddd277e436a0c3f38820eca8aab4e32c01bb44e1b5766eb369b5e6
+```
+
+Same rule: do not hard-code it. The validator derives it from the installed
+official app.
 
 ## 3. Choose the symptom before repairing
 
@@ -203,6 +218,13 @@ This branch covers errors such as:
 Missing required setting
 mcp_servers.node_repl.env.NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S
 ```
+
+On the build-6720-era launcher, this error meant the frontend had removed the
+managed hash. The current launcher (commit `bb31f11b0`) recreates the hash
+after `NODE_REPL_TRUSTED_CODE_PATHS` at every launch instead of hard-failing.
+If this error still appears, the deployed launcher predates that commit or the
+frontend also removed the anchor; record the official build and the exact
+error, then ask the owner before changing the launcher.
 
 ### 4.1 Preserve the live preimage
 
@@ -666,6 +688,31 @@ no update request reaches app-server, use section 6.8. If build `6720` sends
 `config/batchWrite` but the old GPT default is returned, use the verified
 `rc.13` path in sections 6.3-6.7. Do not run a Rust build as an update ritual.
 
+### 9.3 Build 6849 config-rewrite behavior
+
+Official ChatGPT `26.818.21641` build `6849` rewrites
+`~/.sudhir-codex/config.toml` a few seconds after launch. Its new
+`mcp_servers.node_repl.env` block keeps `NODE_REPL_TRUSTED_CODE_PATHS` and adds
+build-specific keys such as `BROWSER_USE_AVAILABLE_BACKENDS` and
+`NODE_REPL_TRUSTED_SERVICES`, but omits
+`NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S`. It leaves
+`shell_environment_policy.set.NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S` at the
+current hash.
+
+Expected consequences:
+
+- the on-disk `mcp_servers.node_repl.env` browser-hash key may be absent after
+  every fresh launch even though the app is healthy;
+- the launcher recreates both trust entries at the next launch (commit
+  `bb31f11b0`), so startup keeps working;
+- treat `shell_environment_policy.set` as the authoritative hash table.
+
+If a later official build also removes the `NODE_REPL_TRUSTED_CODE_PATHS`
+anchor or renames the trust contract, the launcher will fail again with a
+`Cannot insert` or `Missing required setting` error. Record the official
+version/build and the exact error, then ask the owner before changing the
+launcher.
+
 ## 10. Final validation checklist
 
 Do not declare a repair complete until all items relevant to the symptom pass.
@@ -674,7 +721,11 @@ Do not declare a repair complete until all items relevant to the symptom pass.
 
 - Both app signatures are valid.
 - Bundle IDs are `com.openai.codex` and `com.sudhir.codex`.
-- Both managed trust tables contain the current official Browser hash.
+- `shell_environment_policy.set` contains the current official Browser hash
+  (authoritative for build 6849+).
+- `mcp_servers.node_repl.env` either contains the current hash or keeps the
+  `NODE_REPL_TRUSTED_CODE_PATHS` anchor; an absent hash on disk is expected
+  because the frontend rewrites that block after launch.
 - `mcp_servers.node_repl.command` selects
   `~/.sudhir-codex/control/bin/sudhir-primary-node-repl`.
 - Transition status reports `running=true`.
