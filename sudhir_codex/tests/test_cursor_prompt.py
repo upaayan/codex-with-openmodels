@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from sudhir_codex_gateway.cursor_prompt import build_cursor_turn
+from sudhir_codex_gateway.cursor_prompt import estimate_prompt_tokens
 from sudhir_codex_gateway.errors import GatewayError
 
 
@@ -120,6 +121,12 @@ class CursorPromptTests(unittest.TestCase):
 
         with self.assertRaisesRegex(GatewayError, "working directory"):
             build_cursor_turn(request)
+
+    def test_estimate_prompt_tokens_uses_sent_text_not_agent_loop(self) -> None:
+        self.assertEqual(estimate_prompt_tokens(""), 0)
+        self.assertEqual(estimate_prompt_tokens("abcd"), 1)
+        self.assertEqual(estimate_prompt_tokens("a" * 12), 3)
+        self.assertLess(estimate_prompt_tokens("short prompt"), 128000)
 
 
 if __name__ == "__main__":

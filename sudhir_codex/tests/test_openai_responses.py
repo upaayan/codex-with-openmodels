@@ -619,6 +619,43 @@ class OpenAIResponsesTests(unittest.TestCase):
         )
         self.assertEqual(json.loads(search_output["output"]), [])
 
+    def test_chat_style_message_items_without_type_are_accepted(self) -> None:
+        request = self.request()
+        request["instructions"] = None
+        request["input"] = [
+            {"role": "system", "content": "You are helpful."},
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+        ]
+
+        upstream, _bindings = responses_to_openai_request(request, self.model)
+
+        self.assertEqual(
+            upstream["input"],
+            [
+                {"role": "system", "content": "You are helpful."},
+                {"role": "user", "content": "hi"},
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": "hello",
+                },
+            ],
+        )
+
+    def test_unknown_input_item_type_is_still_rejected(self) -> None:
+        request = self.request()
+        request["input"] = [
+            {
+                "type": "not_a_real_item",
+                "role": "user",
+                "content": "hi",
+            }
+        ]
+
+        with self.assertRaisesRegex(GatewayError, "unsupported"):
+            responses_to_openai_request(request, self.model)
+
 
 if __name__ == "__main__":
     unittest.main()

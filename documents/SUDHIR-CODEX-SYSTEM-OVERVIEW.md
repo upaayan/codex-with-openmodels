@@ -366,7 +366,15 @@ Known gateway changes to preserve:
 
 - `b80c38232` — accept chat-style untyped message items from pi-ai (dsh); also
   normalizes string `content`. Fixes `unsupported_input_item` and
-  `invalid_content` for non-Cursor open models reached through dsh.
+  `invalid_content` for chat-completions open models reached through dsh.
+- openai-responses path — same untyped `{role, content}` acceptance in
+  `openai_responses.py`, so switching from Cursor Grok to xAI Grok in dsh does
+  not fail with `unsupported_input_item` / `type None`. Typed ChatGPT Responses
+  items are unchanged.
+- Cursor usage — `_cursor_response` reports `prompt_tokens` from the prompt
+  text sent to Cursor (`estimate_prompt_tokens`), not Cursor SDK agent-loop
+  `inputTokens`. Prevents dsh/pi-ai silent `CONTEXT_WINDOW_EXCEEDED` on a
+  successful Cursor `stop`. ChatGPT Codex traffic still uses `_gpt_response`.
 - `9beedfbf6` — accept `Authorization: Bearer` for dsh credential injection.
 
 The objective is not to make updates impossible. It is to make the known
