@@ -7423,32 +7423,21 @@ async fn changing_cyber_model_reasoning_preserves_selected_permissions() {
                         reasoning_effort: Some(Some(effort.clone())),
                         developer_instructions: None,
                     });
-                app.handle_event(
-                    &mut tui,
-                    &mut app_server,
-                    AppEvent::ApplyAdvancedReasoning {
-                        model: model_name.clone(),
-                        effort: effort.clone(),
-                    },
-                )
-                .await
-                .expect("advanced reasoning selection should succeed");
-            } else {
-                app.handle_event(
-                    &mut tui,
-                    &mut app_server,
-                    AppEvent::UpdateModel(model_name.clone()),
-                )
-                .await
-                .expect("same-model selection should succeed");
-                app.handle_event(
-                    &mut tui,
-                    &mut app_server,
-                    AppEvent::UpdateReasoningEffort(Some(effort.clone())),
-                )
-                .await
-                .expect("reasoning selection should succeed");
             }
+            app.handle_event(
+                &mut tui,
+                &mut app_server,
+                AppEvent::UpdateModel(model_name.clone()),
+            )
+            .await
+            .expect("same-model selection should succeed");
+            app.handle_event(
+                &mut tui,
+                &mut app_server,
+                AppEvent::UpdateActiveReasoningEffort(Some(effort.clone())),
+            )
+            .await
+            .expect("active reasoning selection should succeed");
 
             let settings = next_thread_settings_updated(&mut app_server, thread_id)
                 .await
@@ -7468,7 +7457,7 @@ async fn changing_cyber_model_reasoning_preserves_selected_permissions() {
             );
             assert_eq!(
                 settings.collaboration_mode.mode,
-                app.chat_widget.effective_collaboration_mode().mode
+                app.chat_widget.current_collaboration_mode().mode
             );
             assert_eq!(settings.collaboration_mode.settings.model, model_name);
         }
