@@ -4,6 +4,55 @@ This is the durable index of reproduced Sudhir-Codex defects and their repair
 status. A fixed entry remains here so a later backend or gateway upgrade does
 not accidentally reintroduce it.
 
+## SC-BUG-2026-09-04-001 — Computer Use template lookup prevents launcher startup
+
+- **Status:** Fixed locally, live Computer Use verified, Opus PASS with zero
+  findings; source commit `0630f079e`. Normal post-restart GUI acceptance awaits
+  the owner’s safe handoff, as recorded in the implementation record.
+- **Area:** Primary launcher Computer Use provisioning.
+- **Observed:** ChatGPT `26.901.22334` / `7746`, cache `1.0.1000926`;
+  last successful launcher log entry `2026-09-04T04:51:12Z`, first observed failure
+  `04:56:10Z` (10:26:10 IST).
+- **Error:** `Computer Use plugin has no recoverable instruction template for skills/computer-use/SKILL.md`.
+
+### Root cause
+
+The primary cache lacked `skills/computer-use/SKILL.md`; the current app-bundled
+skill is a short overview without the preserved runtime's Bootstrap/API format.
+The resolver required the old cache layout, ignored the intact stable skill and
+owned assets, and searched primary `frontend-control-runtime/original-plugins`
+instead of `control/original-plugins`. Full node-repl instructions and six valid
+backup versions existed. The node-repl variant marker does not prove intentional
+omission: the app materializer can create the skill from the node-repl document.
+The exact actor that left the cache skill absent was not established.
+
+### Fix
+
+Prefer owned full instructions, use explicit primary/transition control roots,
+and recover from full node-repl instructions if a skill is absent or short.
+Render the primary stable Bootstrap once; stable and compatibility instructions
+share identical bytes. Update only existing cache instruction documents; an owned
+template also works with no installed cache. The existing wrapper compatibility
+copy remains. Backups are last-known-good, not necessarily upstream-original.
+
+### Verification and deployment evidence
+
+[Implementation and exact evidence](../plan-audit-implementation/computer_use_launcher_upgrade_implementation.md)
+records red-before/green-after regressions, source checks, local sync and live
+Computer Use verification, audit verdict, commit, and any pending GUI acceptance.
+The scope creates no app bundle, release version, or runtime copy.
+
+### Upgrade preservation requirement
+
+Keep `_frontend_transition_control.py`, the five upgrade regressions in
+`test_frontend_transition.py`, and their `GATEWAY_TESTS` membership together.
+The existing `gateway-linux` source-CI lane runs them. Candidate reconciliation
+must retain all three; tests and the runner sit outside gateway source parity.
+See [backend preservation](../BACKEND-MONTHLY-UPGRADE.md#computer-use-launcher-repair-preservation--2026-09-04)
+and [current frontend checks](../FRONTEND-UPDATE.md#checks-before-accepting-an-upgrade).
+Stable paths and the preserved IPC-2 instruction lineage survive cache updates;
+a deliberate future runtime/API refresh needs owner approval and full validation.
+
 ## SC-BUG-2026-08-08-001 — GPT fails after a DeepSeek turn
 
 - **Status:** Fixed and live verified on 2026-08-08; recurrence corrected,

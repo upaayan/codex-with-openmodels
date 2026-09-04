@@ -209,6 +209,7 @@ on unchanged components.
 | Models appear but a fresh draft snaps back; `config/batchWrite` is followed by the old GPT default | App-server new-task default policy | Verify the response and config, then activate the known-good `rc.13` release set | Gateway build, visibility edits, full Electron clone, local Rust build |
 | Models appear but no picker update RPC reaches app-server | Official frontend draft state | Record the official build and stop at the frontend boundary | Assuming the `rc.13` backend fix covers a different frontend failure |
 | Existing task sends `thread/settings/update` and receives an error | App-server/gateway | Read the exact response and gateway route before changing code | Assuming frontend failure |
+| Launcher reports `no recoverable instruction template` | Computer Use template lookup | Use the stable skill and correct primary `control/` recovery roots; follow repair runbook §8.3 | Recreating versioned caches or rebuilding Rust |
 | Backend does not start | Launcher, CLI wrapper, deployed app-server or gateway process | Check paths, process tree and logs | Rebuilding before identifying a missing or stale file |
 | Browser/Computer Use fails | Stable shim/control runtime or trust hash | Validate the shim, helper, socket and current hash | Editing plugin-cache copies first |
 
@@ -243,6 +244,15 @@ changes its RPC contract, the receiving Sudhir component must be diagnosed and
 made compatible; the launcher cannot infer that compatibility automatically.
 
 ### 4.3 Current verified recovery points
+
+For the September Computer Use template repair, the stable skill is
+`~/.sudhir-codex/skills/computer-use/SKILL.md`. Recovery uses primary
+`~/.sudhir-codex/control/plugin-assets`, `control/original-plugins/<version>`
+and `control/original-plugin-*`. The preserved legacy runtime/recovery root is
+`~/.sudhir-codex-chatgpt/frontend-control-runtime`. These are different roles,
+not competing versions. See [the current frontend procedure](FRONTEND-UPDATE.md)
+for template priority and upgrade checks. Preserve the control module, its five
+regressions and targeted-runner entries together in future gateway upgrades.
 
 The 20 August trust repair is stored locally at:
 

@@ -6,7 +6,7 @@
 
 **Target:** Diagnose in five minutes; repair known config failures in ten
 
-**Last verified:** 20 August 2026
+**Last verified:** 20 August 2026; Computer Use template recovery updated 4 September 2026
 
 Read the owner overview first:
 [SUDHIR-CODEX-SYSTEM-OVERVIEW.md](SUDHIR-CODEX-SYSTEM-OVERVIEW.md).
@@ -663,6 +663,31 @@ Re-run transition status. If startup fails, the launcher's stderr and the
 desktop log identify whether the failure occurred before app-server launch,
 during the app-server handshake, or in the gateway.
 
+### 8.3 Exact error: no recoverable instruction template
+
+For `Computer Use plugin has no recoverable instruction template for
+skills/computer-use/SKILL.md`, follow the
+[current template recovery procedure](FRONTEND-UPDATE.md#computer-use-instruction-recovery-and-preservation).
+This is startup provisioning, before app-server/gateway launch; it does not by
+itself indicate a broken backend. The September cache lacked the skill and the
+new app-bundled overview lacked Bootstrap/API instructions; stable full
+instructions remained available but the resolver ignored them and searched the
+wrong primary backup folder.
+
+Primary recovery uses `~/.sudhir-codex/control/plugin-assets`,
+`~/.sudhir-codex/control/original-plugins/<version>` and
+`~/.sudhir-codex/control/original-plugin-*`, after the stable local skill.
+The legacy transition root is
+`~/.sudhir-codex-chatgpt/frontend-control-runtime`. Do not mix the two roots or
+copy a shortened upstream overview into the stable skill.
+
+Preserve preimages (existing SKILL.md files also need same-directory timestamped
+backups), run the five regressions and the documented `sync_primary_control_runtime`
+Python entrypoint twice, then the signed-shim live check. The sync does not quit
+ChatGPT. A normal launcher relaunch can stop an active official instance and
+still requires the disruption approval in section 0. Use the existing files and
+folders; do not create another runtime version for this error.
+
 ## 9. Official ChatGPT update procedure
 
 An official update is a compatibility event, not authorization for a new app
@@ -680,7 +705,8 @@ build.
 
 ### 9.2 Validate in this order
 
-1. Run the trust validator in section 2.4.
+1. Run the trust validator in section 2.4 and the five Computer Use upgrade
+   regressions plus safe primary sync in [FRONTEND-UPDATE.md](FRONTEND-UPDATE.md#checks-before-accepting-an-upgrade).
 2. Start Sudhir-Codex through the small launcher.
 3. Require `running`, `appServerRunning` and `controlRuntime.ready` to be true.
 4. Test a fresh non-GPT draft.
@@ -713,8 +739,9 @@ Expected consequences:
   `bb31f11b0`), so startup keeps working;
 - treat `shell_environment_policy.set` as the authoritative hash table.
 
-If a later official build also removes the `NODE_REPL_TRUSTED_CODE_PATHS`
-anchor or renames the trust contract, the launcher will fail again with a
+If a later official build removes any required key (the node-repl command,
+module path, Node path, trusted-code paths, app version, or shell Browser hash)
+or renames the trust contract, the launcher will fail again with a
 `Cannot insert` or `Missing required setting` error. Record the official
 version/build and the exact error, then ask the owner before changing the
 launcher.

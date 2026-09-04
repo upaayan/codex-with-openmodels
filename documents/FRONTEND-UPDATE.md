@@ -1,5 +1,139 @@
 # Sudhir-Codex frontend update
 
+## Current procedure — 2026-09-04
+
+`/Applications/Sudhir-Codex.app` is the small signed launcher. It runs
+`scripts/gpt-pro-frontend-transition ensure-primary` from the operational
+checkout and opens the official `/Applications/ChatGPT.app` with the private
+Sudhir backend, state and profile. An official ChatGPT update does not require
+cloning/repackaging the app or rebuilding Rust. The full-app procedures below
+are retained as historical evidence only.
+
+Observed at this repair: ChatGPT `26.901.22334` / build `7746`, launcher
+`1.0.0` / build `1`, Computer Use cache `1.0.1000926`. These are dated evidence,
+not versions to pin or recreate during future upgrades.
+
+| Purpose | Current absolute path |
+|---|---|
+| Operational source / editable Python installation | `/Users/sudhirjha/.playground/sudhir-codex` |
+| Launcher source | `/Users/sudhirjha/.playground/sudhir-codex-app` |
+| Official UI | `/Applications/ChatGPT.app` |
+| Installed signed launcher | `/Applications/Sudhir-Codex.app` |
+| Private state | `/Users/sudhirjha/.sudhir-codex` |
+| Electron profile | `/Users/sudhirjha/Library/Application Support/Sudhir-Codex-ChatGPT` |
+| Stable instructions | `/Users/sudhirjha/.sudhir-codex/skills/computer-use/SKILL.md` |
+| Stable wrapper | `/Users/sudhirjha/.sudhir-codex/control/computer-use-client.mjs` |
+| Signed-runtime shim | `/Users/sudhirjha/.sudhir-codex/control/bin/sudhir-primary-node-repl` |
+| Preserved IPC-2 runtime | `/Users/sudhirjha/.sudhir-codex-chatgpt/frontend-control-runtime/legacy-cua` |
+| Launcher log | `/Users/sudhirjha/Library/Logs/Sudhir-Codex-Launcher.log` |
+
+### Computer Use instruction recovery and preservation
+
+The September failure was in startup template lookup, before the app-server
+launched: `Computer Use plugin has no recoverable instruction template for
+skills/computer-use/SKILL.md`. The cache skill was absent, the app-bundled short
+skill lacked the legacy Bootstrap/API format, and primary recovery searched
+the wrong folder. The full node-repl instructions and stable local skill still
+existed. The `node-repl` variant marker does not explain the removal: the app's
+materializer can copy node-repl instructions into that skill path. The actor
+that left this cache skill absent was not established.
+
+Primary provisioning now selects a full compatible template in this order:
+
+1. `~/.sudhir-codex/skills/computer-use/SKILL.md`.
+2. `~/.sudhir-codex/control/plugin-assets/` instruction documents.
+3. `~/.sudhir-codex/control/original-plugins/<version>/`, then legacy
+   `~/.sudhir-codex/control/original-plugin-*/` instruction documents.
+4. Compatible installed Computer Use cache instructions, including
+   `.codex-plugin/computer-use-node-repl.md` when the skill is absent/short.
+
+The primary root is `~/.sudhir-codex/control`, **not**
+`~/.sudhir-codex/frontend-control-runtime`. Legacy transition recovery uses
+`~/.sudhir-codex-chatgpt/frontend-control-runtime` and retains its plugin-root
+Bootstrap. Both paths search their own `original-plugins` and `original-plugin-*`.
+Those folders are last-known-good recovery pools; the frontend may have
+materialized harness-derived bytes, so they are not guaranteed upstream originals.
+
+The primary stable skill and both preserved instruction documents get identical
+bytes pointing to the stable wrapper. Existing cache instruction documents get
+those same bytes; absent cache instruction documents remain absent. The shared
+installer retains its cache-wrapper compatibility copy. No cache directory is
+required when a full owned template exists. Repeated provisioning and replacement
+or pruning of upstream cache versions preserve the owned instruction lineage.
+
+The full instructions are deliberately paired with the preserved IPC-2 client.
+An upstream policy/overview document without that API is not a replacement.
+The accepted template grammar still requires `## Bootstrap` followed by another
+level-two heading (currently `## API surface`). If no compatible template remains,
+provisioning reports the missing source rather than inventing instructions.
+A future runtime/API migration is a separate owner-approved change: preserve the
+old stable skill and assets, verify complete replacement instructions against the
+chosen runtime, install them at the same stable path, then run the checks below.
+
+### Checks before accepting an upgrade
+
+For this repair, preserve the module, five regressions and their `GATEWAY_TESTS`
+entries together; see [backend preservation](BACKEND-MONTHLY-UPGRADE.md#computer-use-launcher-repair-preservation--2026-09-04).
+Run the exact checks against the candidate source, and again after activation:
+
+```bash
+cd /Users/sudhirjha/.playground/sudhir-codex
+PYTHONPATH="$PWD/sudhir_codex/src:$PWD/sudhir_codex/tests" .venv/bin/python -m unittest -v \
+  test_frontend_transition.FrontendTransitionTests.test_primary_control_survives_plugin_layout_changes \
+  test_frontend_transition.FrontendTransitionTests.test_primary_control_recovers_from_owned_templates \
+  test_frontend_transition.FrontendTransitionTests.test_primary_control_recovers_from_node_instructions_and_cache_replacement \
+  test_frontend_transition.FrontendTransitionTests.test_transition_template_recovery_uses_transition_backups \
+  test_frontend_transition.FrontendTransitionTests.test_primary_control_reports_missing_instruction_sources
+```
+
+Before applying a sync, preserve config and managed control outputs, including a
+timestamped same-directory backup of every existing SKILL.md being changed.
+This supported Python entrypoint runs the launcher's primary provisioning without
+quitting the active app (there is no `sync-primary` CLI verb):
+
+```bash
+cd /Users/sudhirjha/.playground/sudhir-codex
+.venv/bin/python - <<'PY_SYNC'
+import json
+from sudhir_codex_gateway._frontend_transition_state import TransitionPaths
+from sudhir_codex_gateway.frontend_transition import sync_primary_control_runtime
+print(json.dumps(sync_primary_control_runtime(TransitionPaths.from_env()), indent=2))
+PY_SYNC
+```
+
+Run it twice and require identical stable instruction bytes, the stable wrapper
+path, and no newly manufactured cache skill. Verify the real signed shim/client:
+
+```bash
+cd /Users/sudhirjha/.playground/sudhir-codex-app
+SUDHIR_CONTROL_BUILD_DIR=dist/control-components-test-20260807-1 \
+SUDHIR_CONTROL_TEST_CUA_LAUNCH=1 \
+node --test --test-concurrency=1 \
+  --test-name-pattern='stable primary Computer Use boundary ignores poisoned frontend environment' \
+  tests/control-components.integration.test.mjs
+```
+
+The named test must run, not skip. It requires real `sky.list_apps()` success,
+Finder present, exactly one configured helper, and socket mode `0600`, despite
+incorrect environment inputs. Reuse the existing signed components; a missing
+fixture is not authorization to rebuild them.
+
+Finally relaunch through `/Applications/Sudhir-Codex.app` and validate the actual
+post-launch task. `ensure-primary` may terminate an official ChatGPT instance,
+including the host of an active repair task: finish safe checks first and obtain
+the owner's approval for that disruption under the [repair runbook](SUDHIR-CODEX-REPAIR-RUNBOOK.md).
+`frontend-status` compares different products in this architecture; an apparent
+version mismatch is not an instruction to build a clone.
+
+## Historical full-app procedures and dated verification
+
+Everything below is retained history from the previous full-app architecture,
+including version statements and build commands. Use the current procedure above
+and the repair runbook for the installed small launcher.
+
+<details>
+<summary>Historical clone/repackage/sign procedure (not the current update path)</summary>
+
 This procedure rebuilds the independently namespaced Sudhir-Codex macOS app
 from the currently installed official ChatGPT app.
 
@@ -996,3 +1130,5 @@ candidate and logs were preserved. The build now checks the source framework's
 real version before staging or replacement. The complete evidence, mandatory
 self-update state machine, and non-freezing future-upgrade path are recorded in
 `/Users/sudhirjha/.playground/sudhir-codex-app/INCIDENT-2026-08-01-FRAMEWORK-ABI.md`.
+
+</details>
