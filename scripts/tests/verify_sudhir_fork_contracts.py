@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 import tomllib
+from sudhir_native_packaging_contracts import assert_agent_acceptance_scheduled
 from pathlib import Path
 from typing import Any
 
@@ -152,11 +153,17 @@ def lint(path: Path, platform: str | None) -> dict[str, Any]:
         for source in row["source"]:
             if not (ROOT / source).is_file():
                 raise ContractError(f"{row['id']}: source file is missing: {source}")
+        if row.get("artifact_test") and not (ROOT / row["artifact_test"]).is_file():
+            raise ContractError(f"{row['id']}: scheduled artifact test file is missing")
         _assert_test_resolves(row)
 
     source_workflow = SOURCE_WORKFLOW.read_text(encoding="utf-8")
     rust_workflow = RUST_WORKFLOW.read_text(encoding="utf-8")
     native_workflow = NATIVE_WORKFLOW.read_text(encoding="utf-8")
+    try:
+        assert_agent_acceptance_scheduled(native_workflow)
+    except AssertionError as error:
+        raise ContractError(str(error)) from error
     required_source_commands = (
         "python scripts/tests/verify_sudhir_fork_contracts.py lint --platform linux",
         "python scripts/tests/run_sudhir_fork_contracts.py --platform linux --phase prebuild",

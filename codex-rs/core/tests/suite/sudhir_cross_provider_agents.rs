@@ -26,7 +26,8 @@ const SUDHIR_AGENTS_NAMESPACE: &str = "sudhir_agents";
 const PARENT_PROMPT: &str = "spawn the requested Sudhir test child";
 const CHILD_MESSAGE: &str = "return the Sudhir plaintext nonce";
 const SPAWN_CALL_ID: &str = "sudhir-spawn-call";
-const ROUTE_MODELS: [&str; 3] = [
+const ROUTE_MODELS: [&str; 4] = [
+    "gpt-6-astra",
     "gpt-5.6-sol",
     "pi-deepseek/deepseek-v4-flash",
     "cursor/composer-2.5",
@@ -175,7 +176,10 @@ async fn assert_plaintext_route_pair(parent_model: &str, child_model: &str) -> R
         .filter(|item| item["type"] == "agent_message")
         .collect::<Vec<_>>();
     assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0]["content"][0]["text"], json!(CHILD_MESSAGE));
+    assert_eq!(
+        messages[0]["content"],
+        json!([{ "type": "input_text", "text": CHILD_MESSAGE }])
+    );
     assert_eq!(messages[0].get("encrypted_content"), None);
     Ok(())
 }

@@ -63,7 +63,9 @@ fn communication_from_tool_message(
     source: &crate::tools::context::ToolCallSource,
     trigger_turn: bool,
 ) -> InterAgentCommunication {
-    if turn.model_info().slug.starts_with("pi-") {
+    if turn.model_info().slug.starts_with("pi-")
+        || turn.config.multi_agent_v2.tool_namespace.as_deref() == Some("sudhir_agents")
+    {
         return InterAgentCommunication::new(author, recipient, Vec::new(), message, trigger_turn);
     }
     if !matches!(

@@ -149,6 +149,7 @@ jobs:
         run: |
           python -m compileall -q sudhir_codex/src sudhir_codex/tests
           python scripts/tests/verify_sudhir_fork_contracts.py lint --platform linux
+          python -m unittest scripts.tests.sudhir_native_packaging_contracts
           python scripts/tests/run_sudhir_fork_contracts.py --platform linux --phase prebuild --evidence artifacts/fork-contracts-linux-prebuild.json
           python scripts/tests/sudhir_targeted_regressions.py gateway
           ruff check sudhir_codex/src sudhir_codex/tests

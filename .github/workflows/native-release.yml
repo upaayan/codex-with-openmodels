@@ -47,6 +47,13 @@ jobs:
           [[ "$tag_commit" == "$GITHUB_SHA" ]]
           echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
 
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+
+      - name: Require scheduled fork acceptance before compilation
+        run: python3 scripts/tests/verify_sudhir_fork_contracts.py lint --platform linux
+
   macos:
     name: Apple Silicon macOS bundle
     needs: tag-check
@@ -84,6 +91,9 @@ jobs:
         run: |
           python3 "${GITHUB_WORKSPACE}/scripts/tests/sudhir_app_server_artifact.py" \
             target/aarch64-apple-darwin/release/codex
+
+      - name: Verify plaintext child agents and tool output
+        run: python3 "${GITHUB_WORKSPACE}/scripts/tests/sudhir_agents_artifact.py" target/aarch64-apple-darwin/release/codex
 
       - name: Strip, ad-hoc sign, and smoke-test
         shell: bash
@@ -199,6 +209,9 @@ jobs:
         run: |
           python3 "${GITHUB_WORKSPACE}/scripts/tests/sudhir_app_server_artifact.py" \
             target/x86_64-unknown-linux-musl/release/codex
+
+      - name: Verify plaintext child agents and tool output
+        run: python3 "${GITHUB_WORKSPACE}/scripts/tests/sudhir_agents_artifact.py" target/x86_64-unknown-linux-musl/release/codex
 
       - name: Strip and hash bundled bwrap
         shell: bash

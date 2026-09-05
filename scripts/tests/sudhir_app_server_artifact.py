@@ -57,7 +57,7 @@ def verify(binary: Path) -> None:
         config_path.write_text(
             'model = "gpt-default"\n'
             'model_reasoning_effort = "high"\n'
-            "check_for_update_on_startup = false\n",
+            "check_for_update_on_startup = false\n[features]\nplugins = false\n",
             encoding="utf-8",
         )
         environment = os.environ.copy()
