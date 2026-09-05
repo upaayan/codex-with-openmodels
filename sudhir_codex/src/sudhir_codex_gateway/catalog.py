@@ -17,6 +17,8 @@ OPENAI_CODEX_PROVIDER = "openai-codex"
 MODEL_ID_PREFIX = "pi-"
 SUPPORTED_OPEN_MODEL_APIS = {
     "anthropic-messages",
+    "google-generative-ai",
+    "google-vertex",
     "openai-completions",
     "openai-responses",
 }
@@ -24,6 +26,14 @@ SUPPORTED_OPEN_MODEL_APIS = {
 # Some built-in providers have known defaults even when models.json omits them.
 # Keep this deliberately small: an unknown provider must be explicit.
 KNOWN_PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
+    "google": {
+        "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+        "api": "google-generative-ai",
+    },
+    "google-vertex": {
+        "baseUrl": "https://{location}-aiplatform.googleapis.com",
+        "api": "google-vertex",
+    },
     "xai": {
         "baseUrl": "https://api.x.ai/v1",
         "api": "openai-completions",
@@ -349,7 +359,13 @@ def synthesize_model_info(
         "effective_context_window_percent": 90,
         "experimental_supported_tools": [],
         "input_modalities": modalities,
-        "supports_search_tool": model.api in {"openai-completions", "openai-responses"},
+        "supports_search_tool": model.api
+        in {
+            "google-generative-ai",
+            "google-vertex",
+            "openai-completions",
+            "openai-responses",
+        },
         "use_responses_lite": False,
         "auto_review_model_override": None,
         "tool_mode": None,

@@ -69,7 +69,7 @@ async fn pressure_compaction_uses_selected_model() {
     let test = builder.build(&server).await.expect("build test codex");
 
     test.codex
-        .submit(disabled_permission_user_turn(
+        .start_or_steer_turn(disabled_permission_user_turn(
             "before switch",
             test.cwd.path().to_path_buf(),
             previous_model.to_string(),
@@ -81,7 +81,7 @@ async fn pressure_compaction_uses_selected_model() {
     })
     .await;
     test.codex
-        .submit(disabled_permission_user_turn(
+        .start_or_steer_turn(disabled_permission_user_turn(
             "after switch",
             test.cwd.path().to_path_buf(),
             selected_model.to_string(),
@@ -149,7 +149,7 @@ async fn model_provider_and_hash_change_do_not_compact_without_pressure() {
         ("after switch", selected_model),
     ] {
         test.codex
-            .submit(disabled_permission_user_turn(
+            .start_or_steer_turn(disabled_permission_user_turn(
                 prompt,
                 test.cwd.path().to_path_buf(),
                 model.to_string(),
@@ -223,7 +223,7 @@ async fn legacy_hash_resume_uses_selected_model_without_spurious_compaction() {
         .expect("rollout path");
     initial
         .codex
-        .submit(disabled_permission_user_turn(
+        .start_or_steer_turn(disabled_permission_user_turn(
             "before resume",
             initial.cwd.path().to_path_buf(),
             previous_model.to_string(),
@@ -268,7 +268,7 @@ async fn legacy_hash_resume_uses_selected_model_without_spurious_compaction() {
         .expect("resume codex");
     resumed
         .codex
-        .submit(disabled_permission_user_turn(
+        .start_or_steer_turn(disabled_permission_user_turn(
             "after resume",
             resumed.cwd.path().to_path_buf(),
             selected_model.to_string(),

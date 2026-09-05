@@ -76,6 +76,49 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(model.api, "anthropic-messages")
         self.assertEqual(model.request_url, "https://pi.test/v1/messages")
 
+    def test_loads_native_google_and_vertex_routes_from_pi_defaults(self) -> None:
+        write_json(
+            self.pi_dir / "models.json",
+            {
+                "providers": {
+                    "google": {
+                        "api": "google-generative-ai",
+                        "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+                        "models": [
+                            {
+                                "id": "gemini-3.7-flash",
+                                "reasoning": True,
+                                "input": ["text", "image"],
+                            }
+                        ],
+                    },
+                    "google-vertex": {
+                        "models": [
+                            {
+                                "id": "gemini-3.7-flash",
+                                "reasoning": True,
+                                "input": ["text", "image"],
+                            }
+                        ]
+                    },
+                }
+            },
+        )
+
+        models = {model.provider_id: model for model in self.loader().load().models}
+
+        self.assertEqual(models["google"].api, "google-generative-ai")
+        self.assertEqual(models["google-vertex"].api, "google-vertex")
+        self.assertEqual(
+            models["google-vertex"].base_url,
+            "https://{location}-aiplatform.googleapis.com",
+        )
+        self.assertTrue(
+            synthesize_model_info(models["google"], "base", 100)[
+                "supports_search_tool"
+            ]
+        )
+
     def test_xai_grok45_enables_deferred_tool_search(self) -> None:
         write_json(
             self.pi_dir / "models.json",
@@ -309,6 +352,10 @@ class CatalogTests(unittest.TestCase):
                 "cursor/composer-2.5-slow",
                 "cursor/composer-latest-fast",
                 "cursor/composer-latest-slow",
+                "cursor/grok-4.5-fast",
+                "cursor/grok-4.5-slow",
+                "cursor/grok-4.6-fast",
+                "cursor/grok-4.6-slow",
             ],
         )
         self.assertEqual(document["models"][0]["multi_agent_version"], "v2")

@@ -36,6 +36,7 @@ pub(crate) use send_message::Handler as SendMessageHandler;
 pub(crate) use spawn::Handler as SpawnAgentHandler;
 pub(crate) use wait::Handler as WaitAgentHandler;
 
+mod analytics;
 mod followup_task;
 mod interrupt_agent;
 mod list_agents;
@@ -62,7 +63,7 @@ fn communication_from_tool_message(
     source: &crate::tools::context::ToolCallSource,
     trigger_turn: bool,
 ) -> InterAgentCommunication {
-    if turn.model_info.slug.starts_with("pi-") {
+    if turn.model_info().slug.starts_with("pi-") {
         return InterAgentCommunication::new(author, recipient, Vec::new(), message, trigger_turn);
     }
     if !matches!(

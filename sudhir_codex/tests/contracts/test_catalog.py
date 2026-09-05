@@ -21,8 +21,16 @@ class CatalogContracts(unittest.TestCase):
             self,
             (
                 (_catalog.CatalogTests, "test_loads_non_codex_models_with_collision_free_ids"),
+                (
+                    _catalog.CatalogTests,
+                    "test_loads_native_google_and_vertex_routes_from_pi_defaults",
+                ),
                 (_catalog.CatalogTests, "test_merged_catalog_keeps_gpt_and_adds_pi"),
                 (_app.GatewayAppTests, "test_models_merge_live_gpt_and_pi_catalogs"),
+                (
+                    _app.GatewayAppTests,
+                    "test_native_google_routes_use_pi_runtime_instead_of_http_adapter",
+                ),
                 (
                     _cursor_catalog.CursorCatalogTests,
                     "test_pinned_and_moving_aliases_remain_distinct",

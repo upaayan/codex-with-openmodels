@@ -122,6 +122,8 @@ Examples:
 sudhir-codex -m gpt-5.6-sol
 sudhir-codex -m pi-zai/glm-5.2
 sudhir-codex exec -m pi-deepseek/deepseek-chat "Inspect this repository."
+sudhir-codex exec -m pi-google/gemini-3.7-flash "Inspect this repository."
+sudhir-codex exec -m pi-google-vertex/gemini-3.7-flash "Inspect this repository."
 sudhir-codex exec -m cursor/composer-latest-fast "Inspect this repository."
 ```
 
@@ -132,12 +134,17 @@ cursor/composer-2.5-fast
 cursor/composer-2.5-slow
 cursor/composer-latest-fast
 cursor/composer-latest-slow
+cursor/grok-4.5-fast
+cursor/grok-4.5-slow
+cursor/grok-4.6-fast
+cursor/grok-4.6-slow
 ```
 
 The `composer-2.5` routes stay pinned. Cursor resolves `composer-latest`
 dynamically, so those two routes can move to Composer 3 when Cursor changes the
-alias. Fast/slow is part of the model ID; the displayed High effort is a fixed
-Codex metadata value, not a second Cursor reasoning control.
+alias. The Grok routes select Cursor's exact `grok-4.5` and `grok-4.6` aliases.
+Fast/slow is part of the model ID; the displayed High effort is a fixed Codex
+metadata value, not a second Cursor reasoning control.
 
 Inside the TUI, `/model` shows the same merged catalog. Selecting another model
 changes the model for subsequent turns in that task. Different tasks can use
@@ -160,6 +167,11 @@ Composer's shell/read/edit loop. It loads Cursor's ambient
 `settingSources=["all"]`, including Cursor-native settings, rules, skills, and
 MCP configuration. Codex MCP tables in `$HOME/.sudhir-codex/config.toml` are not
 automatically translated into Cursor SDK MCP definitions.
+
+OpenAI-compatible `prompt_tokens` for Cursor routes are estimated from the
+prompt the gateway sent, not from Cursor SDK `usage.inputTokens`. That SDK
+field is the native agent-loop total and must not be forwarded as prompt usage.
+ChatGPT Codex requests do not use this path.
 
 The per-turn process boundary is intentional. Cursor's shell inherits the Node
 process directory even when the SDK receives a separate `local.cwd`. Launching
@@ -192,9 +204,10 @@ Use six agents. Use model pi-zai/glm-5.2 for each agent.
 The same mechanism accepts an exact Cursor ID. Each child Codex task launches
 its own Composer native-agent turn.
 
-The model still decides when and how to invoke the agent tools. A provider must
-actually support ordinary OpenAI-style function calls for its model to drive a
-tool loop.
+The model still decides when and how to invoke the agent tools. Compatibility
+routes need ordinary OpenAI-style function calls; native Google and Vertex
+routes use Pi's Gemini function-calling conversion and preserve Google thought
+signatures across follow-up tool turns.
 
 Hosted ChatGPT web search remains available to GPT models. Pi models do not
 receive the provider-hosted web-search tool; when Codex has a standalone
@@ -240,6 +253,13 @@ An existing private file is backed up first. Alternatively,
 The OAuth server controls access-token and refresh-token lifetimes. This fork
 does not and cannot extend them.
 
+Gemini Developer API and Google Vertex authentication remain provider-scoped
+inside Pi. Gemini uses its configured API key. Vertex can use a Google Cloud
+API key or Application Default Credentials plus project and location. Native
+inference runs through the pinned Pi `0.82.1` runtime and its `@google/genai`
+dependency. The Pi string `google-generative-ai` names an API transport; it is
+not the deprecated Python package `google-generativeai`.
+
 ## Gateway lifecycle and diagnostics
 
 ```bash
@@ -278,8 +298,11 @@ its SDK. Those providers may have their own service-side logging policies.
 
 ## Current adapter limits
 
-- Pi providers must expose OpenAI-compatible Chat Completions over HTTPS, or
-  loopback HTTP.
+- Generic Pi providers must expose OpenAI-compatible Chat Completions,
+  OpenAI Responses, or Anthropic Messages over HTTPS (or loopback HTTP).
+- The built-in `google-generative-ai` and `google-vertex` API types instead use
+  Pi's provider-native `@google/genai` runtime. Google image input must arrive
+  as a base64 data URL; remote image URLs are not fetched by the gateway.
 - The first implementation buffers each Pi completion before returning
   Responses SSE.
 - Generic provider-hosted web search and audio translation are not supported
@@ -308,3 +331,27 @@ $HOME/.sudhir-codex                  # private state
 ```
 
 No official `codex` command or `$HOME/.codex` state needs to be restored.
+
+
+### Catalog version compatibility
+
+The gateway detects the installed core directly with `--version` once at startup.
+The GPT catalog uses that version by default. Both desktop catalog requests and
+`sudhir-codex models` use this same gateway decision. Health/status JSON shows
+`catalog_version.actual`, `effective`, `override`, and `detection_error`.
+
+```bash
+sudhir-codex gateway catalog-version
+sudhir-codex gateway catalog-version 0.153.2
+sudhir-codex gateway stop
+sudhir-codex gateway start
+# Restore the honest default, then restart the gateway:
+sudhir-codex gateway catalog-version --clear
+```
+
+The explicit override persists in the private state's
+`gateway/catalog-version-override`, outside frontend-managed `config.toml`.
+There is no automatic fallback to another version. If detection fails without
+an override, GPT catalog loading uses its existing cache/unavailable behavior;
+Pi and Cursor routes remain available. Restart after replacing the core or
+changing the override. A gateway restart interrupts active gateway requests.

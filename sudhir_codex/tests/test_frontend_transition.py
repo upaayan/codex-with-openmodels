@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
@@ -563,6 +564,204 @@ BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"
             ],
         )
 
+    @staticmethod
+    def _instruction_source(marker: str) -> str:
+        return (
+            f"# Computer Use {marker}\n\n## Bootstrap\n"
+            'globalThis.sky = (await import("@oai/sky")).sky;\n\n'
+            f"## API surface\n{marker}: sky.list_apps()\n\n"
+            f"## Policy\n{marker}: preserve confirmation rules.\n"
+        )
+
+    @staticmethod
+    def _put_instruction(path: Path, text: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+
+    def _primary_control_case(self, name: str):
+        control = replace(self.paths.control_runtime, primary_state=self.root / name)
+        for executable in (control.node, control.node_repl):
+            executable.parent.mkdir(parents=True, exist_ok=True)
+            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            executable.chmod(0o700)
+        return control
+
+    def _provision_primary_case(self, control):
+        # Only platform signing/component checks are mocked; resolver and writes run.
+        with (
+            mock.patch.object(
+                frontend_control, "_verify_control_components", return_value={}
+            ),
+            mock.patch.object(frontend_control, "_verify_openai_node_repl"),
+        ):
+            return frontend_control.provision_primary_control_runtime(control)
+
+    @staticmethod
+    def _plugin_case(state: Path, version: str) -> Path:
+        return state / "plugins/cache/openai-bundled/computer-use" / version
+
+    def _assert_primary_instructions(self, control, marker: str) -> bytes:
+        content = control.primary_skill.read_bytes()
+        text = content.decode("utf-8")
+        self.assertIn(str(control.primary_wrapper), text)
+        self.assertIn(f"{marker}: sky.list_apps()", text)
+        self.assertIn(f"{marker}: preserve confirmation rules.", text)
+        self.assertNotIn("<plugin root>", text)
+        self.assertNotIn('import("@oai/sky")', text)
+        for relative in frontend_control.PLUGIN_FILES[1:]:
+            self.assertEqual(
+                (
+                    control.primary_state / "control/plugin-assets" / relative
+                ).read_bytes(),
+                content,
+            )
+        return content
+
+    def test_primary_control_survives_plugin_layout_changes(self) -> None:
+        for layout in ("no-cache", "missing-skill", "short-skill"):
+            with self.subTest(layout=layout):
+                control = self._primary_control_case(layout)
+                self._put_instruction(
+                    control.primary_skill, self._instruction_source("PINNED")
+                )
+                plugin = self._plugin_case(control.primary_state, "1.0.test")
+                node_doc, skill = (
+                    plugin / path for path in frontend_control.PLUGIN_FILES[1:]
+                )
+                if layout == "missing-skill":
+                    self._put_instruction(
+                        node_doc, self._instruction_source("UPSTREAM")
+                    )
+                elif layout == "short-skill":
+                    self._put_instruction(skill, "# Short overview without Bootstrap\n")
+                result = self._provision_primary_case(control)
+                self.assertEqual(
+                    result["controlPluginVersions"],
+                    [] if layout == "no-cache" else ["1.0.test"],
+                )
+                content = self._assert_primary_instructions(control, "PINNED")
+                for document, present in (
+                    (node_doc, layout == "missing-skill"),
+                    (skill, layout == "short-skill"),
+                ):
+                    self.assertEqual(document.is_file(), present)
+                    if present:
+                        self.assertEqual(document.read_bytes(), content)
+                self._provision_primary_case(control)
+                self.assertEqual(
+                    self._assert_primary_instructions(control, "PINNED"), content
+                )
+                if layout == "missing-skill":
+                    self.assertFalse(skill.exists())
+                    self.assertFalse(
+                        (
+                            control.primary_state
+                            / "control/original-plugins/1.0.test"
+                            / frontend_control.PLUGIN_FILES[2]
+                        ).exists()
+                    )
+
+    def test_primary_control_recovers_from_owned_templates(self) -> None:
+        for folder in (
+            "plugin-assets",
+            "original-plugins/1.0.saved",
+            "original-plugin-saved",
+        ):
+            for relative in frontend_control.PLUGIN_FILES[1:]:
+                with self.subTest(folder=folder, relative=relative):
+                    control = self._primary_control_case(
+                        f"owned-{folder.replace('/', '-')}-{relative.name}"
+                    )
+                    source = control.primary_state / "control" / folder / relative
+                    self._put_instruction(source, self._instruction_source("OWNED"))
+                    wrong = (
+                        control.primary_state
+                        / "frontend-control-runtime"
+                        / folder
+                        / relative
+                    )
+                    self._put_instruction(wrong, self._instruction_source("WRONG-ROOT"))
+                    plugin = self._plugin_case(control.primary_state, "9.0.new")
+                    self._put_instruction(
+                        plugin / relative, self._instruction_source("UPSTREAM")
+                    )
+                    self.assertEqual(
+                        frontend_control._instruction_template(
+                            control.primary_state,
+                            frontend_control.PLUGIN_FILES[2],
+                            control_root=control.primary_state / "control",
+                        ),
+                        source,
+                    )
+                    self._provision_primary_case(control)
+                    self._assert_primary_instructions(control, "OWNED")
+
+    def test_primary_control_recovers_from_node_instructions_and_cache_replacement(
+        self,
+    ) -> None:
+        for short_skill in (False, True):
+            with self.subTest(short_skill=short_skill):
+                control = self._primary_control_case(f"cache-replacement-{short_skill}")
+                old = self._plugin_case(control.primary_state, "1.0.old")
+                node_relative, skill_relative = frontend_control.PLUGIN_FILES[1:]
+                self._put_instruction(
+                    old / node_relative, self._instruction_source("RECOVERED")
+                )
+                if short_skill:
+                    self._put_instruction(old / skill_relative, "# Upstream overview\n")
+                self._provision_primary_case(control)
+                original = self._assert_primary_instructions(control, "RECOVERED")
+                self.assertEqual((old / skill_relative).is_file(), short_skill)
+                shutil.rmtree(
+                    old
+                )  # Simulate frontend pruning only this temporary cache.
+                new = self._plugin_case(control.primary_state, "2.0.new")
+                self._put_instruction(
+                    new / node_relative, self._instruction_source("NEW-API")
+                )
+                result = self._provision_primary_case(control)
+                self.assertEqual(result["controlPluginVersions"], ["2.0.new"])
+                self.assertEqual(
+                    self._assert_primary_instructions(control, "RECOVERED"), original
+                )
+                self.assertEqual((new / node_relative).read_bytes(), original)
+                self.assertFalse((new / skill_relative).exists())
+
+    def test_transition_template_recovery_uses_transition_backups(self) -> None:
+        for folder in ("original-plugins/1.0.saved", "original-plugin-saved"):
+            with self.subTest(folder=folder):
+                state = self.root / ("legacy-" + folder.replace("/", "-"))
+                relative = frontend_control.PLUGIN_FILES[2]
+                source = state / "frontend-control-runtime" / folder / relative
+                self._put_instruction(source, self._instruction_source("TRANSITION"))
+                self._put_instruction(
+                    state / "control" / folder / relative,
+                    self._instruction_source("WRONG-PRIMARY"),
+                )
+                plugin = self._plugin_case(state, "9.0.new")
+                self._put_instruction(
+                    plugin / relative, self._instruction_source("UPSTREAM")
+                )
+                self.assertEqual(
+                    frontend_control._instruction_template(state, relative), source
+                )
+                assets = frontend_control._prepare_plugin_assets(
+                    self.paths.control_runtime, state
+                )
+                text = assets.skill.read_text(encoding="utf-8")
+                self.assertIn("TRANSITION: sky.list_apps()", text)
+                self.assertIn("<plugin root>/scripts/computer-use-client.mjs", text)
+                self.assertNotIn(str(self.paths.control_runtime.primary_wrapper), text)
+
+    def test_primary_control_reports_missing_instruction_sources(self) -> None:
+        control = self._primary_control_case("no-source")
+        plugin = self._plugin_case(control.primary_state, "1.0.short")
+        self._put_instruction(plugin / frontend_control.PLUGIN_FILES[2], "# Overview\n")
+        with self.assertRaisesRegex(
+            frontend_control.ControlRuntimeError, "no recoverable instruction template"
+        ):
+            self._provision_primary_case(control)
+
     def test_primary_local_skill_uses_stable_wrapper_outside_plugin_cache(
         self,
     ) -> None:
@@ -647,6 +846,41 @@ Keep this API text.
         )
         self.assertEqual(updated.count("fresh-browser-hash"), 2)
         self.assertIn('BROWSER_USE_CODEX_APP_VERSION = "26.new"', updated)
+
+    def test_primary_control_config_recreates_frontend_removed_trust_entries(
+        self,
+    ) -> None:
+        source = (self.primary / "config.toml").read_text(encoding="utf-8")
+        source = source.replace(
+            'NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S = "old-browser-hash"\n',
+            "",
+            1,
+        ).replace(
+            "[shell_environment_policy.set]\n"
+            f'NODE_REPL_TRUSTED_CODE_PATHS = "{self.primary}"\n',
+            "[shell_environment_policy.set]\n",
+            1,
+        )
+        control = self.paths.control_runtime
+
+        updated = apply_primary_control_config(
+            source,
+            control,
+            official_version="26.new",
+            browser_client_hash="fresh-browser-hash",
+        )
+
+        trusted_paths = f"{self.primary}:{control.official_node_modules}"
+        self.assertEqual(
+            updated.count(f'NODE_REPL_TRUSTED_CODE_PATHS = "{trusted_paths}"'),
+            2,
+        )
+        self.assertEqual(
+            updated.count(
+                'NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S = "fresh-browser-hash"'
+            ),
+            2,
+        )
 
     def test_native_pipe_rewrite_uses_transition_specific_environment(self) -> None:
         source = (

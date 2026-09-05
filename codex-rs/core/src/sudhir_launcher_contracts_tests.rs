@@ -1,9 +1,21 @@
-use super::EXCLUDED_EXPORT_VARS;
 use crate::exec_env::SUDHIR_CODEX_GATEWAY_TOKEN_ENV_VAR;
+use codex_shell_command::shell_detect::ShellType;
+use codex_shell_command::shell_snapshot::snapshot_script;
 
 #[test]
+#[cfg(unix)]
 fn gateway_token_is_absent_from_model_shell_snapshot() {
-    assert!(EXCLUDED_EXPORT_VARS.contains(&SUDHIR_CODEX_GATEWAY_TOKEN_ENV_VAR));
-    assert_ne!(SUDHIR_CODEX_GATEWAY_TOKEN_ENV_VAR, "PWD");
-    assert_ne!(SUDHIR_CODEX_GATEWAY_TOKEN_ENV_VAR, "OLDPWD");
+    let output = std::process::Command::new("/bin/bash")
+        .args([
+            "-c",
+            &snapshot_script(ShellType::Bash).expect("bash snapshot"),
+        ])
+        .env("BASH_ENV", "/dev/null")
+        .env(SUDHIR_CODEX_GATEWAY_TOKEN_ENV_VAR, "snapshot-secret")
+        .output()
+        .expect("capture shell snapshot");
+    assert!(output.status.success());
+    let snapshot = String::from_utf8(output.stdout).expect("utf8 snapshot");
+    assert!(!snapshot.contains(SUDHIR_CODEX_GATEWAY_TOKEN_ENV_VAR));
+    assert!(!snapshot.contains("snapshot-secret"));
 }

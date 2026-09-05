@@ -139,6 +139,12 @@ def _translate_input(
                 400, "invalid_input", "Responses input item is not an object"
             )
         kind = item.get("type")
+        if kind is None and "role" in item and "content" in item:
+            # pi-ai (dsh) emits chat-style message items as {role, content}
+            # without the Responses "type" field. Treat them as messages so a
+            # model switch onto an openai-responses route (xAI Grok) does not
+            # fail with unsupported_input_item.
+            kind = "message"
         if kind == "message":
             translated.append(_translate_message(item, model))
         elif kind == "agent_message":

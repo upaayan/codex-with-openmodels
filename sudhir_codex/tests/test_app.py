@@ -4,6 +4,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import httpx
 
@@ -11,18 +12,28 @@ from helpers import basic_pi_document
 from helpers import make_repo
 from helpers import write_json
 from sudhir_codex_gateway.app import BufferedResponse
-from sudhir_codex_gateway.app import CHATGPT_CLIENT_VERSION
+from sudhir_codex_gateway.catalog_version import CatalogVersion
+
 from sudhir_codex_gateway.app import GATEWAY_TOKEN_HEADER
 from sudhir_codex_gateway.app import GatewayApp
 from sudhir_codex_gateway.app import GatewaySettings
 from sudhir_codex_gateway.app import StreamingResponse
+from sudhir_codex_gateway.cursor_prompt import estimate_prompt_tokens
 from sudhir_codex_gateway.cursor_worker import CursorTurnResult
 from sudhir_codex_gateway.errors import GatewayError
 from sudhir_codex_gateway.pi_auth_worker import PiAuthResult
+from sudhir_codex_gateway.pi_auth_worker import PiInferenceHTTPError
+from sudhir_codex_gateway.pi_auth_worker import PiInferenceResult
+
+
+CHATGPT_CLIENT_VERSION = "0.153.4"
 
 
 class GatewayAppTests(unittest.TestCase):
     def setUp(self) -> None:
+        version_patch = patch("sudhir_codex_gateway.app.resolve_catalog_version", return_value=CatalogVersion(CHATGPT_CLIENT_VERSION, CHATGPT_CLIENT_VERSION, None, None))
+        version_patch.start()
+        self.addCleanup(version_patch.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.repo = make_repo(self.root / "repo")
@@ -65,6 +76,7 @@ class GatewayAppTests(unittest.TestCase):
                 "service": "sudhir-codex-gateway",
                 "instance_id": self.settings.instance_id,
                 "pid": os.getpid(),
+                "catalog_version": CatalogVersion(CHATGPT_CLIENT_VERSION, CHATGPT_CLIENT_VERSION, None, None).document(),
             },
         )
 
@@ -281,6 +293,21 @@ class GatewayAppTests(unittest.TestCase):
         )
         self.assertEqual(worker.calls[0]["cwd"], self.root)
         self.assertEqual(worker.calls[0]["thread_id"], "thread-cursor")
+        prompt = worker.calls[0]["prompt"]
+        self.assertIsInstance(prompt, str)
+        expected_input = estimate_prompt_tokens(prompt)
+        self.assertGreater(expected_input, 0)
+        self.assertNotEqual(expected_input, 11)
+        completed = next(
+            event
+            for line in response.body.decode().splitlines()
+            if line.startswith("data: ")
+            for event in [json.loads(line.removeprefix("data: "))]
+            if event.get("type") == "response.completed"
+        )
+        usage = completed["response"]["usage"]
+        self.assertEqual(usage["input_tokens"], expected_input)
+        self.assertEqual(usage["output_tokens"], 5)
         self.assertTrue(worker.closed)
 
         audit = self.settings.route_audit_path.read_text(encoding="utf-8")
@@ -421,6 +448,172 @@ class GatewayAppTests(unittest.TestCase):
         self.assertEqual(observed["body"]["max_tokens"], 8192)
         self.assertNotIn("reasoning_effort", observed["body"])
         self.assertIn(b"Messages replied", response.body)
+
+    def test_native_google_routes_use_pi_runtime_instead_of_http_adapter(self) -> None:
+        write_json(
+            self.pi / "models.json",
+            {
+                "providers": {
+                    "google": {
+                        "api": "google-generative-ai",
+                        "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+                        "models": [
+                            {"id": "gemini-3.7-flash", "reasoning": True}
+                        ],
+                    },
+                    "google-vertex": {
+                        "models": [
+                            {"id": "gemini-3.7-flash", "reasoning": True}
+                        ]
+                    },
+                }
+            },
+        )
+
+        class FakePiRuntime:
+            def __init__(self) -> None:
+                self.calls: list[tuple[object, object, object]] = []
+                self.closed = False
+
+            def infer(self, model, chat_request, reasoning):
+                self.calls.append((model, chat_request, reasoning))
+                return PiInferenceResult(
+                    provider_id=model.provider_id,
+                    model_id=model.upstream_id,
+                    api=model.api,
+                    destination=(
+                        "aiplatform.googleapis.com"
+                        if model.api == "google-vertex"
+                        else "generativelanguage.googleapis.com"
+                    ),
+                    response={
+                        "choices": [
+                            {
+                                "message": {
+                                    "role": "assistant",
+                                    "content": f"{model.provider_id} replied",
+                                }
+                            }
+                        ],
+                        "usage": {
+                            "prompt_tokens": 4,
+                            "completion_tokens": 2,
+                            "total_tokens": 6,
+                        },
+                    },
+                )
+
+            def close(self) -> None:
+                self.closed = True
+
+        worker = FakePiRuntime()
+        app = GatewayApp(
+            self.settings,
+            http_client=httpx.Client(
+                transport=httpx.MockTransport(
+                    lambda _request: self.fail(
+                        "Native Google route used the HTTP compatibility adapter"
+                    )
+                )
+            ),
+            pi_auth_worker=worker,
+        )
+        try:
+            for provider in ("google", "google-vertex"):
+                response = app.responses(
+                    {GATEWAY_TOKEN_HEADER: "gateway-secret"},
+                    json.dumps(
+                        {
+                            "model": f"pi-{provider}/gemini-3.7-flash",
+                            "instructions": "Be concise",
+                            "input": [
+                                {
+                                    "type": "message",
+                                    "role": "user",
+                                    "content": [
+                                        {"type": "input_text", "text": "hello"}
+                                    ],
+                                }
+                            ],
+                            "reasoning": {"effort": "high"},
+                            "stream": True,
+                        }
+                    ).encode(),
+                )
+                self.assertIsInstance(response, BufferedResponse)
+                self.assertIn(f"{provider} replied".encode(), response.body)
+        finally:
+            app.close()
+
+        self.assertEqual(
+            [(call[0].provider_id, call[2]) for call in worker.calls],
+            [("google", "high"), ("google-vertex", "high")],
+        )
+        self.assertEqual(worker.calls[0][1]["messages"][0]["role"], "system")
+        self.assertTrue(worker.closed)
+        audit = self.settings.route_audit_path.read_text(encoding="utf-8")
+        self.assertIn('"provider_id":"google"', audit)
+        self.assertIn('"provider_id":"google-vertex"', audit)
+
+    def test_native_google_error_preserves_upstream_response(self) -> None:
+        write_json(
+            self.pi / "models.json",
+            {
+                "providers": {
+                    "google": {
+                        "api": "google-generative-ai",
+                        "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+                        "models": [{"id": "gemini-3.7-flash"}],
+                    }
+                }
+            },
+        )
+
+        class FailingPiRuntime:
+            def infer(self, _model, _chat_request, _reasoning):
+                raise PiInferenceHTTPError(
+                    429,
+                    {
+                        "content-type": "application/problem+json",
+                        "x-request-id": "google-request-429",
+                    },
+                    b'{"error":{"message":"quota exceeded"}}',
+                )
+
+            def close(self) -> None:
+                return
+
+        app = GatewayApp(self.settings, pi_auth_worker=FailingPiRuntime())
+        try:
+            response = app.responses(
+                {GATEWAY_TOKEN_HEADER: "gateway-secret"},
+                json.dumps(
+                    {
+                        "model": "pi-google/gemini-3.7-flash",
+                        "input": [
+                            {
+                                "type": "message",
+                                "role": "user",
+                                "content": [{"type": "input_text", "text": "hello"}],
+                            }
+                        ],
+                    }
+                ).encode(),
+            )
+        finally:
+            app.close()
+
+        self.assertEqual(
+            response,
+            BufferedResponse(
+                status=429,
+                headers={
+                    "content-type": "application/problem+json",
+                    "x-request-id": "google-request-429",
+                },
+                body=b'{"error":{"message":"quota exceeded"}}',
+            ),
+        )
 
     def test_xai_grok45_uses_responses_transport(self) -> None:
         write_json(
@@ -699,7 +892,7 @@ class GatewayAppTests(unittest.TestCase):
                             openai_reasoning,
                             {
                                 "type": "reasoning",
-                                "id": "foreign-reasoning",
+                                "id": "foreign-plaintext-reasoning",
                                 "summary": [],
                                 "content": [
                                     {
@@ -708,6 +901,21 @@ class GatewayAppTests(unittest.TestCase):
                                     }
                                 ],
                                 "encrypted_content": None,
+                            },
+                            {
+                                "type": "reasoning",
+                                "id": "foreign-route-scoped-reasoning",
+                                "summary": [],
+                                "content": [
+                                    {
+                                        "type": "reasoning_text",
+                                        "text": "DeepSeek private reasoning",
+                                    }
+                                ],
+                                "encrypted_content": (
+                                    "sudhir-codex-route-v1.853f10f9207f80235ec0b1d6."
+                                    "fbd0a62b-c79e-4ee6-8fd3-47371f11223f-0"
+                                ),
                             },
                             assistant_message,
                         ],
@@ -1137,6 +1345,10 @@ class GatewayAppTests(unittest.TestCase):
                 "cursor/composer-2.5-slow",
                 "cursor/composer-latest-fast",
                 "cursor/composer-latest-slow",
+                "cursor/grok-4.5-fast",
+                "cursor/grok-4.5-slow",
+                "cursor/grok-4.6-fast",
+                "cursor/grok-4.6-slow",
             },
         )
         self.assertEqual(by_id["gpt-test"]["multi_agent_version"], "v2")
@@ -1208,3 +1420,90 @@ class GatewayAppTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CatalogVersionTests(unittest.TestCase):
+    def test_detect_override_clear_and_failure(self):
+        import subprocess
+        from sudhir_codex_gateway.catalog_version import resolve_catalog_version, set_catalog_version_override
+        from sudhir_codex_gateway.platform_support import core_binary_name
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            state = root / "state"
+            state.mkdir()
+            with patch("sudhir_codex_gateway.catalog_version.subprocess.run") as run:
+                run.return_value.stdout = "codex-cli 0.153.4\n"
+                result = resolve_catalog_version(root, state)
+                self.assertEqual(result, CatalogVersion("0.153.4", "0.153.4", None, None))
+                self.assertEqual(run.call_args.args[0], [str(root / "dist" / core_binary_name()), "--version"])
+                self.assertEqual(run.call_args.kwargs["env"]["CODEX_HOME"], str(state))
+                set_catalog_version_override(state, "0.153.2")
+                self.assertEqual(resolve_catalog_version(root, state), CatalogVersion("0.153.4", "0.153.2", "0.153.2", None))
+                run.side_effect = subprocess.TimeoutExpired("core", 5)
+                result = resolve_catalog_version(root, state)
+                self.assertIsNone(result.actual)
+                self.assertEqual(result.effective, "0.153.2")
+                self.assertTrue(result.detection_error)
+                set_catalog_version_override(state, None)
+                self.assertIsNone(resolve_catalog_version(root, state).effective)
+                run.side_effect = None
+                run.return_value.stdout = "codex-cli 0.148.0-alpha.7\n"
+                self.assertEqual(resolve_catalog_version(root, state).effective, "0.148.0-alpha.7")
+                run.return_value.stdout = "unexpected output"
+                self.assertIsNone(resolve_catalog_version(root, state).effective)
+                with self.assertRaises(GatewayError):
+                    set_catalog_version_override(state, "bad version")
+
+    def test_catalog_routes_use_startup_version_and_failure_keeps_pi(self):
+        from sudhir_codex_gateway.catalog_version import set_catalog_version_override
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = make_repo(root / "repo")
+            state = root / "state"
+            state.mkdir()
+            pi = root / "pi"
+            write_json(pi / "models.json", basic_pi_document())
+            settings = GatewaySettings(repo, state, pi, "test-token")
+            versions = []
+            def handler(request):
+                versions.append(request.url.params["client_version"])
+                return httpx.Response(200, json={"models": [{"slug": "gpt-6-astra", "display_name": "Astra"}]})
+            for override, expected in [(None, "0.153.4"), ("0.153.2", "0.153.2"), (None, "0.153.4")]:
+                set_catalog_version_override(state, override)
+                with patch("sudhir_codex_gateway.catalog_version.subprocess.run") as run:
+                    run.return_value.stdout = "codex-cli 0.153.4\n"
+                    app = GatewayApp(settings, http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+                    try:
+                        response = app.list_models({}, "client_version=0.0.0")
+                        self.assertEqual(response.headers["X-Sudhir-GPT-Catalog"], "live")
+                        self.assertIn("gpt-6-astra", {m["slug"] for m in json.loads(response.body)["models"]})
+                        self.assertEqual(versions[-1], expected)
+                        app.list_models({}, "")
+                        self.assertEqual(run.call_count, 1)
+                    finally:
+                        app.close()
+            with patch("sudhir_codex_gateway.catalog_version.subprocess.run", side_effect=FileNotFoundError):
+                app = GatewayApp(settings, http_client=httpx.Client(transport=httpx.MockTransport(lambda r: self.fail("must not guess version"))))
+                try:
+                    self.assertEqual(app.list_models({}, "").headers["X-Sudhir-GPT-Catalog"], "cache")
+                    settings.gpt_cache_path.unlink()
+                    response = app.list_models({}, "")
+                    self.assertEqual(response.headers["X-Sudhir-GPT-Catalog"], "unavailable")
+                    self.assertTrue(any(m["slug"].startswith("pi-") for m in json.loads(response.body)["models"]))
+                    self.assertEqual(app.health().status, 200)
+                finally:
+                    app.close()
+
+    def test_management_catalog_defers_version_to_gateway(self):
+        from sudhir_codex_gateway.management import list_models
+        from sudhir_codex_gateway.state import RuntimePaths
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            paths = RuntimePaths(root, root / "state", root / "pi")
+            paths.token_file.parent.mkdir(parents=True)
+            paths.token_file.write_text("test-token")
+            with patch("sudhir_codex_gateway.management.start_gateway"), patch("sudhir_codex_gateway.management._private_chatgpt_headers", return_value={}), patch("sudhir_codex_gateway.management.httpx.get") as get:
+                get.return_value = httpx.Response(200, json={"models": [{"slug": "gpt-6-astra"}]}, headers={"X-Sudhir-GPT-Catalog": "live"})
+                models, source = list_models(paths)
+                self.assertEqual((models[0]["id"], source), ("gpt-6-astra", "live"))
+                self.assertNotIn("params", get.call_args.kwargs)

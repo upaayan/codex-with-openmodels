@@ -26,10 +26,12 @@ from .catalog import CatalogLoader
 from .catalog import catalog_etag
 from .catalog import merged_catalog_document
 from .catalog import normalize_gpt_models
+from .catalog_version import resolve_catalog_version
 from .credentials import CredentialResolver
 from .cursor_catalog import CURSOR_MODEL_PREFIX
 from .cursor_catalog import cursor_route
 from .cursor_prompt import build_cursor_turn
+from .cursor_prompt import estimate_prompt_tokens
 from .cursor_worker import CursorWorker
 from .cursor_worker import CursorWorkerClient
 from .deepseek_diagnostics import DeepSeekDiagnosticCapture
@@ -38,17 +40,16 @@ from .openai_responses import openai_response_to_sse
 from .openai_responses import responses_to_openai_request
 from .pi_auth_worker import PiAuthWorker
 from .pi_auth_worker import PiAuthWorkerClient
+from .pi_auth_worker import PiInferenceHTTPError
 from .platform_support import ensure_private_directory
 from .platform_support import ensure_private_file
+from .reasoning import selected_reasoning_effort
 from .visibility import apply_model_visibility
 
 GATEWAY_TOKEN_HEADER = "X-Sudhir-Gateway-Token"
 CHATGPT_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
-# Source checkouts use Cargo version 0.0.0. The authenticated catalog rejects
-# that development version, so advertise the compatibility floor for this
-# upstream snapshot when the gateway talks to ChatGPT.
-CHATGPT_CLIENT_VERSION = "0.144.0"
 PI_CATALOG_LOAD_ATTEMPTS = 3
+PI_NATIVE_APIS = frozenset({"google-generative-ai", "google-vertex"})
 HOP_BY_HOP_HEADERS = {
     "connection",
     "content-length",
@@ -95,6 +96,7 @@ class GatewaySettings:
     pi_agent_dir: Path
     gateway_token: str
     chatgpt_base_url: str = CHATGPT_CODEX_BASE_URL
+    cursor_default_cwd: Path | None = None
 
     @property
     def models_path(self) -> Path:
@@ -201,6 +203,7 @@ class GatewayApp:
         pi_auth_worker: PiAuthWorker | None = None,
     ) -> None:
         self.settings = settings
+        self.catalog_version = resolve_catalog_version(settings.repo_root, settings.state_dir)
         self.loader = CatalogLoader(
             settings.models_path,
             settings.base_instructions_path,
@@ -258,6 +261,7 @@ class GatewayApp:
                 "service": "sudhir-codex-gateway",
                 "instance_id": self.settings.instance_id,
                 "pid": os.getpid(),
+                "catalog_version": self.catalog_version.document(),
             },
         )
 
@@ -493,6 +497,13 @@ class GatewayApp:
             upstream_request, bindings = responses_to_openai_request(request, model)
         else:
             chat_request, bindings = responses_to_chat_request(request, model)
+            if model.api in PI_NATIVE_APIS:
+                return self._pi_native_response(
+                    request,
+                    model,
+                    chat_request,
+                    bindings,
+                )
             upstream_request = (
                 chat_request_to_anthropic(chat_request, model)
                 if model.api == "anthropic-messages"
@@ -595,6 +606,62 @@ class GatewayApp:
             body=sse,
         )
 
+    def _pi_native_response(
+        self,
+        request: dict[str, Any],
+        model: Any,
+        chat_request: dict[str, object],
+        bindings: ToolBindings,
+    ) -> BufferedResponse:
+        started = time.monotonic()
+        try:
+            result = self.pi_auth_worker.infer(
+                model,
+                chat_request,
+                selected_reasoning_effort(request, model),
+            )
+        except PiInferenceHTTPError as exc:
+            self._audit(
+                model.gateway_id,
+                model.provider_id,
+                "aiplatform.googleapis.com"
+                if model.api == "google-vertex"
+                else "generativelanguage.googleapis.com",
+                exc.status,
+                started,
+            )
+            return BufferedResponse(
+                status=exc.status,
+                headers=exc.headers,
+                body=exc.body,
+            )
+        except GatewayError as exc:
+            self._audit(
+                model.gateway_id,
+                model.provider_id,
+                "aiplatform.googleapis.com"
+                if model.api == "google-vertex"
+                else "generativelanguage.googleapis.com",
+                exc.status,
+                started,
+            )
+            raise
+        self._audit(
+            model.gateway_id,
+            model.provider_id,
+            result.destination,
+            200,
+            started,
+        )
+        return BufferedResponse(
+            status=200,
+            headers={
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+            },
+            body=chat_response_to_sse(result.response, bindings),
+        )
+
     def _cursor_response(
         self,
         request: dict[str, Any],
@@ -610,7 +677,11 @@ class GatewayApp:
         if thread_id:
             with self._cursor_cwd_lock:
                 fallback_cwd = self._cursor_cwds.get(thread_id)
-        turn = build_cursor_turn(request, fallback_cwd=fallback_cwd)
+        turn = build_cursor_turn(
+            request,
+            fallback_cwd=fallback_cwd,
+            default_cwd=self.settings.cursor_default_cwd,
+        )
         if thread_id:
             with self._cursor_cwd_lock:
                 self._cursor_cwds[thread_id] = turn.cwd
@@ -628,6 +699,7 @@ class GatewayApp:
             raise
         self._audit(model_id, "cursor", "cursor.com", 200, started)
 
+        input_tokens = estimate_prompt_tokens(turn.prompt)
         sse = chat_response_to_sse(
             {
                 "choices": [
@@ -639,9 +711,9 @@ class GatewayApp:
                     }
                 ],
                 "usage": {
-                    "prompt_tokens": result.input_tokens,
+                    "prompt_tokens": input_tokens,
                     "completion_tokens": result.output_tokens,
-                    "total_tokens": result.input_tokens + result.output_tokens,
+                    "total_tokens": input_tokens + result.output_tokens,
                 },
             },
             ToolBindings([]),
@@ -709,7 +781,9 @@ class GatewayApp:
             for name, value in parse_qsl(query_string, keep_blank_values=True)
             if name != "client_version"
         ]
-        query_pairs.append(("client_version", CHATGPT_CLIENT_VERSION))
+        version = self.catalog_version.effective
+        if version is not None:
+            query_pairs.append(("client_version", version))
         query = urlencode(query_pairs)
         if query:
             target = f"{target}?{query}"
@@ -717,6 +791,8 @@ class GatewayApp:
         started = time.monotonic()
         status = 0
         try:
+            if version is None:
+                raise ValueError("core version unavailable")
             upstream = self.client.get(
                 target,
                 headers=_chatgpt_headers(incoming_headers),
@@ -824,10 +900,6 @@ def _gpt_compatible_request(request: dict[str, Any]) -> dict[str, Any]:
             and item.get("type") == "reasoning"
             and isinstance(item.get("content"), list)
             and bool(item["content"])
-            and not (
-                isinstance(item.get("encrypted_content"), str)
-                and bool(item["encrypted_content"])
-            )
         )
     ]
     if len(filtered_items) == len(input_items):

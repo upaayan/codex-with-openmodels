@@ -131,6 +131,10 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
 
     def _authorized(self) -> bool:
         provided = self.headers.get(GATEWAY_TOKEN_HEADER)
+        if not provided:
+            authorization = self.headers.get("Authorization")
+            if authorization and authorization.lower().startswith("bearer "):
+                provided = authorization[7:].strip()
         if self.gateway.app.authenticate(provided):
             return True
         self._send_error(

@@ -454,14 +454,24 @@ def reasoning_request_options(
     """Translate the requested Codex effort to provider-specific request fields."""
 
     profile = reasoning_profile(model)
+    selected = selected_reasoning_effort(request, model)
+    return copy.deepcopy(profile.level(selected).request_options)
+
+
+def selected_reasoning_effort(
+    request: dict[str, Any],
+    model: OpenModel,
+) -> str:
+    """Resolve one Codex effort to the route's effective Pi reasoning level."""
+
+    profile = reasoning_profile(model)
     requested: str | None = None
     reasoning = request.get("reasoning")
     if isinstance(reasoning, dict):
         value = reasoning.get("effort")
         if isinstance(value, str) and value:
             requested = value
-    selected = requested if requested in profile.efforts else profile.default
-    return copy.deepcopy(profile.level(selected).request_options)
+    return requested if requested in profile.efforts else profile.default
 
 
 def _mapped_metadata_profile(model: OpenModel) -> ReasoningProfile | None:

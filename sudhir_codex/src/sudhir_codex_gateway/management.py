@@ -13,8 +13,8 @@ from typing import Any
 import httpx
 
 from .app import GATEWAY_TOKEN_HEADER
-from .app import CHATGPT_CLIENT_VERSION
 from .app import GatewaySettings
+from .catalog_version import resolve_catalog_version, set_catalog_version_override
 from .errors import GatewayError
 from .platform_support import detached_process_kwargs
 from .platform_support import ensure_private_directory
@@ -57,11 +57,18 @@ def runtime_paths_from_env() -> RuntimePaths:
 
 def gateway_settings(paths: RuntimePaths) -> GatewaySettings:
     token = ensure_private_state(paths)
+    raw_default_cwd = os.environ.get("SUDHIR_CODEX_CURSOR_DEFAULT_CWD")
+    cursor_default_cwd: Path | None = None
+    if raw_default_cwd:
+        cursor_default_cwd = Path(raw_default_cwd).expanduser()
+    elif (Path.home() / "playground").is_dir():
+        cursor_default_cwd = Path.home() / "playground"
     return GatewaySettings(
         repo_root=paths.repo_root,
         state_dir=paths.state_dir,
         pi_agent_dir=paths.pi_agent_dir,
         gateway_token=token,
+        cursor_default_cwd=cursor_default_cwd,
     )
 
 
@@ -248,7 +255,6 @@ def list_models(paths: RuntimePaths) -> tuple[list[dict[str, Any]], str]:
     }
     response = httpx.get(
         f"{paths.gateway_url}/v1/models",
-        params={"client_version": CHATGPT_CLIENT_VERSION},
         headers=headers,
         timeout=10.0,
         follow_redirects=False,
@@ -363,6 +369,14 @@ def main(argv: list[str] | None = None) -> int:
             value = gateway_status(paths)
             print(json.dumps(value, indent=2) if args.json else _status_text(value))
             return 0 if value["running"] else 1
+        if args.command == "catalog-version":
+            validate_isolation(paths)
+            if args.version is not None or args.clear:
+                set_catalog_version_override(paths.state_dir, None if args.clear else args.version)
+            print(json.dumps(resolve_catalog_version(paths.repo_root, paths.state_dir).document(), indent=2))
+            if args.version is not None or args.clear:
+                print("Restart the gateway to apply this setting.")
+            return 0
         if args.command == "models":
             models, source = list_models(paths)
             if args.json:
@@ -416,6 +430,10 @@ def _parser() -> argparse.ArgumentParser:
     models.add_argument("--json", action="store_true")
     doctor_parser = subparsers.add_parser("doctor")
     doctor_parser.add_argument("--json", action="store_true")
+    version = subparsers.add_parser("catalog-version")
+    setting = version.add_mutually_exclusive_group()
+    setting.add_argument("version", nargs="?")
+    setting.add_argument("--clear", action="store_true")
     subparsers.add_parser("rotate-token")
     return parser
 

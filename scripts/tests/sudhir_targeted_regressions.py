@@ -13,12 +13,18 @@ from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 GATEWAY_TESTS = (
+    "test_frontend_transition.FrontendTransitionTests.test_primary_control_survives_plugin_layout_changes",
+    "test_frontend_transition.FrontendTransitionTests.test_primary_control_recovers_from_owned_templates",
+    "test_frontend_transition.FrontendTransitionTests.test_primary_control_recovers_from_node_instructions_and_cache_replacement",
+    "test_frontend_transition.FrontendTransitionTests.test_transition_template_recovery_uses_transition_backups",
+    "test_frontend_transition.FrontendTransitionTests.test_primary_control_reports_missing_instruction_sources",
     "test_frontend_transition.FrontendTransitionTests.test_launch_primary_provisions_stable_computer_use_before_launch",
     "test_frontend_transition.FrontendTransitionTests.test_primary_wrapper_uses_matching_legacy_client_and_starts_helper",
     "test_frontend_transition.FrontendTransitionTests.test_primary_node_repl_shim_overrides_poisoned_frontend_environment",
     "test_frontend_transition.FrontendTransitionTests.test_primary_local_skill_uses_stable_wrapper_outside_plugin_cache",
     "test_frontend_transition.FrontendTransitionTests.test_primary_control_config_points_to_stable_node_repl_shim",
     "test_frontend_transition.FrontendTransitionTests.test_primary_control_config_restores_helper_socket_and_primary_home",
+    "test_frontend_transition.FrontendTransitionTests.test_primary_control_config_recreates_frontend_removed_trust_entries",
     "test_catalog.CatalogTests.test_synthesized_model_is_picker_and_agent_visible",
     "test_catalog.CatalogTests.test_chat_completion_models_enable_gateway_tool_search",
     "test_cursor_catalog.CursorCatalogTests.test_model_metadata_is_picker_and_subagent_visible",
@@ -42,10 +48,18 @@ GATEWAY_TESTS = (
     "test_openai_responses.OpenAIResponsesTests.test_history_only_exec_command_is_serializable_but_not_callable",
     "test_openai_responses.OpenAIResponsesTests.test_historical_discovered_tools_require_active_tool_search",
     "test_openai_responses.OpenAIResponsesTests.test_responses_loads_only_eight_latest_discovered_tools",
+    "test_openai_responses.OpenAIResponsesTests.test_chat_style_message_items_without_type_are_accepted",
+    "test_openai_responses.OpenAIResponsesTests.test_unknown_input_item_type_is_still_rejected",
     "test_credentials.CredentialTests.test_arbitrary_oauth_provider_delegates_to_pi_without_allowlist",
+    "test_app.CatalogVersionTests.test_detect_override_clear_and_failure",
+    "test_app.CatalogVersionTests.test_catalog_routes_use_startup_version_and_failure_keeps_pi",
+    "test_app.CatalogVersionTests.test_management_catalog_defers_version_to_gateway",
     "test_app.GatewayAppTests.test_xai_grok45_uses_responses_transport",
     "test_app.GatewayAppTests.test_pi_provider_error_preserves_status_body_and_request_id",
+    "test_app.GatewayAppTests.test_native_google_error_preserves_upstream_response",
     "test_app.GatewayAppTests.test_gpt_request_omits_foreign_plaintext_reasoning",
+    "test_app.GatewayAppTests.test_cursor_request_uses_the_native_worker_and_returns_responses_sse",
+    "test_cursor_prompt.CursorPromptTests.test_estimate_prompt_tokens_uses_sent_text_not_agent_loop",
 )
 RUST_TESTS = (
     "pre_sampling_compact_uses_selected_model_on_switch_to_smaller_context_model",

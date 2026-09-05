@@ -4,7 +4,9 @@ from dataclasses import dataclass
 from typing import Any
 
 CURSOR_MODEL_PREFIX = "cursor/"
-CURSOR_CONTEXT_WINDOW = 128_000
+# Cursor's Composer models expose a 200K window; the Cursor-hosted Grok
+# 4.5/4.6 routes expose 256K. Values match the Cursor models API.
+CURSOR_CONTEXT_WINDOW = 200_000
 
 
 @dataclass(frozen=True)
@@ -16,6 +18,7 @@ class CursorModelRoute:
     fast: bool
     display_name: str
     description: str
+    context_window: int = CURSOR_CONTEXT_WINDOW
 
 
 CURSOR_MODEL_ROUTES = (
@@ -50,6 +53,38 @@ CURSOR_MODEL_ROUTES = (
         description=(
             "Cursor's moving Composer Latest alias using the slow variant."
         ),
+    ),
+    CursorModelRoute(
+        gateway_id="cursor/grok-4.5-fast",
+        cursor_alias="grok-4.5",
+        fast=True,
+        display_name="Grok 4.5 Fast · Cursor",
+        description="Grok 4.5 using Cursor's fast variant.",
+        context_window=256_000,
+    ),
+    CursorModelRoute(
+        gateway_id="cursor/grok-4.5-slow",
+        cursor_alias="grok-4.5",
+        fast=False,
+        display_name="Grok 4.5 Slow · Cursor",
+        description="Grok 4.5 using Cursor's slow variant.",
+        context_window=256_000,
+    ),
+    CursorModelRoute(
+        gateway_id="cursor/grok-4.6-fast",
+        cursor_alias="grok-4.6",
+        fast=True,
+        display_name="Grok 4.6 Fast · Cursor",
+        description="Grok 4.6 using Cursor's fast variant.",
+        context_window=256_000,
+    ),
+    CursorModelRoute(
+        gateway_id="cursor/grok-4.6-slow",
+        cursor_alias="grok-4.6",
+        fast=False,
+        display_name="Grok 4.6 Slow · Cursor",
+        description="Grok 4.6 using Cursor's slow variant.",
+        context_window=256_000,
     ),
 )
 
@@ -104,8 +139,8 @@ def cursor_model_info(
         # Composer executes its own native tool loop inside the worker.
         "supports_parallel_tool_calls": False,
         "supports_image_detail_original": False,
-        "context_window": CURSOR_CONTEXT_WINDOW,
-        "max_context_window": CURSOR_CONTEXT_WINDOW,
+        "context_window": route.context_window,
+        "max_context_window": route.context_window,
         "auto_compact_token_limit": None,
         "effective_context_window_percent": 90,
         "experimental_supported_tools": [],

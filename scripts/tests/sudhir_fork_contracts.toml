@@ -34,7 +34,7 @@ always = false
 id = "SC-GATEWAY-002"
 behavior = "The gateway client token never reaches model-invoked shell snapshots"
 patch = "fork[launcher]"
-source = ["codex-rs/core/src/exec_env.rs", "codex-rs/core/src/shell_snapshot.rs"]
+source = ["codex-rs/core/src/exec_env.rs", "codex-rs/core/src/shell_snapshot.rs", "codex-rs/shell-command/src/shell_snapshot.rs"]
 test_file = "codex-rs/core/src/sudhir_launcher_contracts_tests.rs"
 test_runner = "rust-nextest"
 test_name = "gateway_token_is_absent_from_model_shell_snapshot"
@@ -49,7 +49,7 @@ always = false
 id = "SC-GATEWAY-003"
 behavior = "Pi-provider HTTP errors preserve upstream status, body, content type, and request IDs instead of becoming a generic gateway 502"
 patch = "fix(gateway)"
-source = ["sudhir_codex/src/sudhir_codex_gateway/app.py"]
+source = ["sudhir_codex/src/sudhir_codex_gateway/app.py", "sudhir_codex/src/sudhir_codex_gateway/pi_auth_worker.py", "sudhir_codex/cursor_worker/pi-auth-worker.mjs"]
 test_file = "sudhir_codex/tests/test_app.py"
 test_runner = "python-unittest"
 test_name = "test_app.GatewayAppTests.test_pi_provider_error_preserves_status_body_and_request_id"
@@ -92,9 +92,9 @@ always = false
 
 [[contract]]
 id = "SC-CATALOG-001"
-behavior = "GPT and open-model catalogs merge with collision-free model IDs"
+behavior = "GPT and open-model catalogs merge with collision-free model IDs, including native Pi Google and Google Vertex routes"
 patch = "fork[catalog]"
-source = ["sudhir_codex/src/sudhir_codex_gateway/catalog.py", "sudhir_codex/src/sudhir_codex_gateway/cursor_catalog.py", "sudhir_codex/src/sudhir_codex_gateway/app.py"]
+source = ["sudhir_codex/src/sudhir_codex_gateway/catalog.py", "sudhir_codex/src/sudhir_codex_gateway/cursor_catalog.py", "sudhir_codex/src/sudhir_codex_gateway/app.py", "sudhir_codex/src/sudhir_codex_gateway/pi_auth_worker.py"]
 test_file = "sudhir_codex/tests/contracts/test_catalog.py"
 test_runner = "python-unittest"
 test_name = "CatalogContracts.test_merged_catalog_has_unique_gpt_pi_and_cursor_ids"
@@ -182,9 +182,9 @@ always = false
 
 [[contract]]
 id = "SC-REASONING-004"
-behavior = "Native encrypted reasoning is replayed only to the exact provider/model/API/base-URL route that created it"
+behavior = "Native encrypted reasoning and Google thought signatures are replayed only to the exact provider and model route that created them"
 patch = "fork[reasoning]"
-source = ["sudhir_codex/src/sudhir_codex_gateway/openai_responses.py"]
+source = ["sudhir_codex/src/sudhir_codex_gateway/openai_responses.py", "sudhir_codex/src/sudhir_codex_gateway/adapter.py", "sudhir_codex/cursor_worker/pi-auth-worker.mjs"]
 test_file = "sudhir_codex/tests/contracts/test_reasoning.py"
 test_runner = "python-unittest"
 test_name = "ReasoningContracts.test_encrypted_reasoning_is_route_scoped"
@@ -302,7 +302,7 @@ always = false
 
 [[contract]]
 id = "SC-OAUTH-WORKER-001"
-behavior = "The pinned Node worker resolves an arbitrary OAuth provider through its ordinary Pi extension"
+behavior = "The pinned Node worker resolves Pi authentication and preserves native Google thought signatures across tool loops"
 patch = "fork[oauth]"
 source = ["sudhir_codex/cursor_worker/pi-auth-worker.mjs"]
 test_file = "sudhir_codex/cursor_worker/pi-auth-worker.test.mjs"

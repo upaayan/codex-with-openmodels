@@ -1,5 +1,6 @@
 """Resolve provider authentication through Pi's registered provider runtime."""
 
+import base64
 import json
 import os
 import subprocess
@@ -15,6 +16,7 @@ from .cursor_worker import _protocol_response
 from .errors import GatewayError
 
 DEFAULT_PI_AUTH_TIMEOUT_SECONDS = 60.0
+DEFAULT_PI_INFERENCE_TIMEOUT_SECONDS = 660.0
 
 
 @dataclass(frozen=True)
@@ -27,8 +29,38 @@ class PiAuthResult:
     base_url: str | None
 
 
+@dataclass(frozen=True)
+class PiInferenceResult:
+    provider_id: str
+    model_id: str
+    api: str
+    destination: str
+    response: dict[str, object]
+
+
+class PiInferenceHTTPError(GatewayError):
+    """An upstream HTTP response preserved by Pi's native provider worker."""
+
+    def __init__(
+        self,
+        status: int,
+        headers: dict[str, str],
+        body: bytes,
+    ) -> None:
+        super().__init__(status, "pi_inference_upstream_error", "Pi inference failed")
+        self.headers = headers
+        self.body = body
+
+
 class PiAuthWorker(Protocol):
     def resolve(self, model: OpenModel) -> PiAuthResult: ...
+
+    def infer(
+        self,
+        model: OpenModel,
+        chat_request: dict[str, object],
+        reasoning: str,
+    ) -> PiInferenceResult: ...
 
     def close(self) -> None: ...
 
@@ -44,18 +76,19 @@ class PiAuthWorkerClient:
         node_binary: Path | None = None,
         environment: dict[str, str] | None = None,
         timeout_seconds: float = DEFAULT_PI_AUTH_TIMEOUT_SECONDS,
+        inference_timeout_seconds: float = DEFAULT_PI_INFERENCE_TIMEOUT_SECONDS,
     ) -> None:
         self.worker_script = worker_script
         self.agent_dir = agent_dir
         self.node_binary = node_binary
         self.environment = environment
         self.timeout_seconds = timeout_seconds
+        self.inference_timeout_seconds = inference_timeout_seconds
         self._lock = threading.Lock()
         self._active: set[subprocess.Popen[str]] = set()
         self._closed = False
 
     def resolve(self, model: OpenModel) -> PiAuthResult:
-        node = self._prepare()
         request_id = uuid.uuid4().hex
         request = {
             "id": request_id,
@@ -63,6 +96,59 @@ class PiAuthWorkerClient:
             "model": model.upstream_id,
             "api": model.api,
         }
+        response = self._exchange(request, model, request_id, operation="authentication")
+        if response.get("ok") is not True:
+            raise GatewayError(
+                503,
+                "pi_auth_resolution_failed",
+                f"Pi authentication failed for provider {model.provider_id!r}",
+            )
+        return _parse_auth_result(response, model)
+
+    def infer(
+        self,
+        model: OpenModel,
+        chat_request: dict[str, object],
+        reasoning: str,
+    ) -> PiInferenceResult:
+        request_id = uuid.uuid4().hex
+        request = {
+            "id": request_id,
+            "op": "infer",
+            "provider": model.provider_id,
+            "model": model.upstream_id,
+            "api": model.api,
+            "chatRequest": chat_request,
+            "reasoning": reasoning,
+        }
+        response = self._exchange(
+            request,
+            model,
+            request_id,
+            operation="inference",
+            timeout_seconds=self.inference_timeout_seconds,
+        )
+        if response.get("ok") is not True:
+            upstream = response.get("upstream")
+            if isinstance(upstream, dict):
+                raise _parse_inference_http_error(upstream, model)
+            raise GatewayError(
+                502,
+                "pi_inference_failed",
+                f"Pi inference failed for provider {model.provider_id!r}",
+            )
+        return _parse_inference_result(response, model)
+
+    def _exchange(
+        self,
+        request: dict[str, object],
+        model: OpenModel,
+        request_id: str,
+        *,
+        operation: str,
+        timeout_seconds: float | None = None,
+    ) -> dict[str, object]:
+        node = self._prepare()
         environment = (
             dict(self.environment)
             if self.environment is not None
@@ -85,7 +171,7 @@ class PiAuthWorkerClient:
             raise GatewayError(
                 503,
                 "pi_auth_worker_start_failed",
-                "Pi authentication worker could not be started",
+                "Pi runtime worker could not be started",
             ) from exc
         with self._lock:
             if self._closed:
@@ -102,7 +188,7 @@ class PiAuthWorkerClient:
         try:
             stdout, _stderr = process.communicate(
                 input=f"{encoded}\n",
-                timeout=self.timeout_seconds,
+                timeout=timeout_seconds or self.timeout_seconds,
             )
         except subprocess.TimeoutExpired as exc:
             process.terminate()
@@ -114,7 +200,7 @@ class PiAuthWorkerClient:
             raise GatewayError(
                 504,
                 "pi_auth_worker_timeout",
-                f"Pi authentication timed out for provider {model.provider_id!r}",
+                f"Pi {operation} timed out for provider {model.provider_id!r}",
             ) from exc
         finally:
             with self._lock:
@@ -125,15 +211,9 @@ class PiAuthWorkerClient:
             raise GatewayError(
                 503,
                 "pi_auth_worker_unavailable",
-                f"Pi authentication is unavailable for provider {model.provider_id!r}",
+                f"Pi {operation} is unavailable for provider {model.provider_id!r}",
             )
-        if response.get("ok") is not True:
-            raise GatewayError(
-                503,
-                "pi_auth_resolution_failed",
-                f"Pi authentication failed for provider {model.provider_id!r}",
-            )
-        return _parse_auth_result(response, model)
+        return response
 
     def close(self) -> None:
         with self._lock:
@@ -214,3 +294,78 @@ def _parse_auth_result(
         headers=dict(raw_headers),
         base_url=base_url or None,
     )
+
+
+def _parse_inference_result(
+    response: dict[str, object],
+    model: OpenModel,
+) -> PiInferenceResult:
+    identity = (
+        response.get("provider"),
+        response.get("model"),
+        response.get("api"),
+    )
+    expected = (model.provider_id, model.upstream_id, model.api)
+    destination = response.get("destination")
+    result = response.get("response")
+    if identity != expected or not isinstance(destination, str) or not destination:
+        raise GatewayError(
+            502,
+            "pi_inference_response_invalid",
+            f"Pi inference returned invalid routing data for {model.provider_id!r}",
+        )
+    if not isinstance(result, dict):
+        raise GatewayError(
+            502,
+            "pi_inference_response_invalid",
+            f"Pi inference returned invalid data for {model.provider_id!r}",
+        )
+    return PiInferenceResult(
+        provider_id=model.provider_id,
+        model_id=model.upstream_id,
+        api=model.api,
+        destination=destination,
+        response=result,
+    )
+
+
+def _parse_inference_http_error(
+    upstream: dict[str, object],
+    model: OpenModel,
+) -> PiInferenceHTTPError:
+    status = upstream.get("status")
+    raw_headers = upstream.get("headers")
+    encoded_body = upstream.get("bodyBase64")
+    if (
+        not isinstance(status, int)
+        or isinstance(status, bool)
+        or status < 400
+        or status > 599
+        or not isinstance(raw_headers, dict)
+        or not all(
+            isinstance(name, str) and isinstance(value, str)
+            for name, value in raw_headers.items()
+        )
+        or not isinstance(encoded_body, str)
+    ):
+        raise GatewayError(
+            502,
+            "pi_inference_response_invalid",
+            f"Pi inference returned invalid error data for {model.provider_id!r}",
+        )
+    try:
+        body = base64.b64decode(encoded_body, validate=True)
+    except ValueError as exc:
+        raise GatewayError(
+            502,
+            "pi_inference_response_invalid",
+            f"Pi inference returned invalid error data for {model.provider_id!r}",
+        ) from exc
+    allowed_headers = {"content-type", "request-id", "x-request-id"}
+    headers = {
+        name.lower(): value
+        for name, value in raw_headers.items()
+        if name.lower() in allowed_headers
+    }
+    headers.setdefault("content-type", "application/json")
+    return PiInferenceHTTPError(status, headers, body)

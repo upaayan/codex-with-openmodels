@@ -118,14 +118,14 @@ def _management_command(argv: list[str]) -> list[str] | None:
             raise GatewayError(
                 64,
                 "gateway_command_missing",
-                "Use gateway start, stop, status, or rotate-token",
+                "Use gateway start, stop, status, rotate-token, or catalog-version",
             )
         command = argv[1]
-        if command not in {"start", "stop", "status", "rotate-token"}:
+        if command not in {"start", "stop", "status", "rotate-token", "catalog-version"}:
             raise GatewayError(
                 64,
                 "gateway_command_invalid",
-                "Use gateway start, stop, status, or rotate-token",
+                "Use gateway start, stop, status, rotate-token, or catalog-version",
             )
         return [command, *argv[2:]]
     if argv[:2] == ["uninstall", "--state"]:

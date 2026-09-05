@@ -24,6 +24,22 @@ const ROUTES = new Map([
     "cursor/composer-latest-slow",
     { alias: "composer-latest", fast: false },
   ],
+  [
+    "cursor/grok-4.5-fast",
+    { alias: "grok-4.5", fast: true },
+  ],
+  [
+    "cursor/grok-4.5-slow",
+    { alias: "grok-4.5", fast: false },
+  ],
+  [
+    "cursor/grok-4.6-fast",
+    { alias: "grok-4.6", fast: true },
+  ],
+  [
+    "cursor/grok-4.6-slow",
+    { alias: "grok-4.6", fast: false },
+  ],
 ]);
 const MODEL_CACHE_MS = 10 * 60 * 1000;
 

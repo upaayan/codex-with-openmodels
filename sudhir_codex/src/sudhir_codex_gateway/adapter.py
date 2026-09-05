@@ -1,5 +1,6 @@
 """Translate Codex Responses requests to OpenAI-compatible chat completions."""
 
+import base64
 import hashlib
 import json
 import re
@@ -19,6 +20,7 @@ IGNORED_INPUT_TYPES = {
     "compaction_trigger",
 }
 MAX_DISCOVERED_TOOLS = 8
+GOOGLE_SIGNATURE_PREFIX = "sudhir-google-signature-v1."
 
 
 @dataclass(frozen=True)
@@ -394,11 +396,14 @@ def chat_response_to_sse(
     ]
     output_count = 0
     reasoning_text, reasoning_field = _chat_reasoning(message)
-    if reasoning_text:
-        signature = message.get("reasoning_signature")
-        encrypted_content: str | None = None
-        if isinstance(signature, str) and signature:
-            encrypted_content = signature
+    signature = message.get("reasoning_signature")
+    encrypted_content = signature if isinstance(signature, str) and signature else None
+    if reasoning_text or encrypted_content:
+        reasoning_content = (
+            [{"type": "reasoning_text", "text": reasoning_text}]
+            if reasoning_text
+            else []
+        )
         events.append(
             {
                 "type": "response.output_item.done",
@@ -406,9 +411,7 @@ def chat_response_to_sse(
                     "type": "reasoning",
                     "id": f"rs_sudhir_{reasoning_field}_{uuid.uuid4().hex}",
                     "summary": [],
-                    "content": [
-                        {"type": "reasoning_text", "text": reasoning_text}
-                    ],
+                    "content": reasoning_content,
                     "encrypted_content": encrypted_content,
                 },
             }
@@ -497,7 +500,10 @@ def _translate_input(
         if _normalizes_reasoning_content(model):
             field = "reasoning_content"
         assistant[field] = pending_reasoning_text
-        if model.api == "anthropic-messages" and pending_reasoning_signature:
+        if _reasoning_signature_matches_model(
+            pending_reasoning_signature,
+            model,
+        ):
             assistant["reasoning_signature"] = pending_reasoning_signature
         pending_reasoning_text = None
         pending_reasoning_field = "reasoning_content"
@@ -566,26 +572,38 @@ def _translate_input(
             call_bindings[call_id] = binding
             continue
 
+        if kind is None and "role" in item and "content" in item:
+            # pi-ai (dsh) emits chat-style message items as {role, content}
+            # without the Responses "type" field, and may carry content as a
+            # plain string (e.g. the system prompt). Treat them as messages so
+            # non-Cursor open models reached through dsh are accepted here.
+            kind = "message"
+
         if kind == "additional_tools":
             continue
 
         flush_pending()
         if kind == "reasoning":
             reasoning_text = _reasoning_item_text(item)
-            if reasoning_text:
+            (
+                reasoning_field,
+                reasoning_signature,
+            ) = _reasoning_item_metadata(item)
+            if reasoning_text or reasoning_signature:
                 pending_reasoning_text = reasoning_text
-                (
-                    pending_reasoning_field,
-                    pending_reasoning_signature,
-                ) = _reasoning_item_metadata(item)
+                pending_reasoning_field = reasoning_field
+                pending_reasoning_signature = reasoning_signature
         elif kind == "message":
             role = str(item.get("role", "user"))
             if role == "developer":
                 role = "system"
             if role not in {"system", "user", "assistant"}:
                 role = "user"
+            raw_content = item.get("content", [])
+            if isinstance(raw_content, str):
+                raw_content = [{"type": "input_text", "text": raw_content}]
             content = _response_content_to_chat(
-                item.get("content", []),
+                raw_content,
                 allow_images="image" in model.input_modalities,
                 assistant=role == "assistant",
             )
@@ -808,6 +826,30 @@ def _reasoning_item_metadata(item: dict[str, Any]) -> tuple[str, str | None]:
             if item_id.startswith(f"rs_sudhir_{field}_"):
                 return field, signature
     return "reasoning_content", signature
+
+
+def _reasoning_signature_matches_model(
+    signature: str | None,
+    model: OpenModel,
+) -> bool:
+    if not signature:
+        return False
+    if not signature.startswith(GOOGLE_SIGNATURE_PREFIX):
+        return model.api == "anthropic-messages"
+    if model.api not in {"google-generative-ai", "google-vertex"}:
+        return False
+    encoded = signature.removeprefix(GOOGLE_SIGNATURE_PREFIX)
+    try:
+        padding = "=" * (-len(encoded) % 4)
+        envelope = json.loads(base64.urlsafe_b64decode(encoded + padding))
+    except (ValueError, json.JSONDecodeError):
+        return False
+    return isinstance(envelope, dict) and (
+        envelope.get("v"),
+        envelope.get("api"),
+        envelope.get("provider"),
+        envelope.get("model"),
+    ) == (1, model.api, model.provider_id, model.upstream_id)
 
 
 def _normalizes_reasoning_content(model: OpenModel) -> bool:

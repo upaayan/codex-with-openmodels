@@ -543,21 +543,28 @@ if (!globalThis.sky) {{
 def _instruction_template(
     working_state: Path,
     relative: Path,
+    *,
+    control_root: Path | None = None,
 ) -> Path:
-    control_root = working_state / CONTROL_ROOT_NAME
-    candidates: list[Path] = []
-    candidates.extend(root / relative for root in reversed(_plugin_roots(working_state)))
+    if control_root is None:
+        control_root = working_state / CONTROL_ROOT_NAME
+    # Owned instructions match the preserved runtime; upstream caches are fallback.
+    relatives = (relative, *(path for path in PLUGIN_FILES[1:] if path != relative))
+    candidates = [working_state / PLUGIN_FILES[2]]
+    candidates.extend(control_root / PLUGIN_ASSETS_NAME / path for path in relatives)
     original_plugins = control_root / "original-plugins"
-    if original_plugins.is_dir():
-        candidates.extend(
-            root / relative
-            for root in sorted(original_plugins.iterdir(), reverse=True)
-            if root.is_dir()
-        )
+    recovery_roots = (
+        sorted(original_plugins.iterdir(), reverse=True)
+        if original_plugins.is_dir()
+        else []
+    )
+    recovery_roots.extend(sorted(control_root.glob("original-plugin-*"), reverse=True))
+    recovery_roots.extend(reversed(_plugin_roots(working_state)))
     candidates.extend(
-        root / relative
-        for root in sorted(control_root.glob("original-plugin-*"), reverse=True)
+        root / path
+        for root in recovery_roots
         if root.is_dir()
+        for path in relatives
     )
     for candidate in candidates:
         if not candidate.is_file():
@@ -602,8 +609,6 @@ def _install_plugin_assets(
     backups: Path | None = None,
 ) -> list[str]:
     roots = _plugin_roots(working_state)
-    if not roots:
-        raise ControlRuntimeError("Transition state has no installed Computer Use plugin")
     if backups is None:
         backups = working_state / CONTROL_ROOT_NAME / "original-plugins"
     versions: list[str] = []
@@ -616,6 +621,9 @@ def _install_plugin_assets(
         versions.append(root.name)
         for relative, source in sources.items():
             destination = root / relative
+            # Cache layouts change. Patch present documents without adding skills.
+            if relative in PLUGIN_FILES[1:] and not destination.is_file():
+                continue
             backup = backups / root.name / relative
             if destination.is_file() and not backup.exists():
                 backup.parent.mkdir(parents=True, exist_ok=True)
@@ -628,40 +636,26 @@ def _install_plugin_assets(
 
 def _prepare_primary_plugin_assets(paths: ControlRuntimePaths) -> PluginAssets:
     state = paths.primary_state
-    if not _plugin_roots(state):
-        raise ControlRuntimeError("Primary state has no installed Computer Use plugin")
+    control_root = state / "control"
+    skill_template = _instruction_template(
+        state, PLUGIN_FILES[2], control_root=control_root
+    )
+    # Read and render once before overwriting a possible recovery source.
+    instructions = _rewrite_primary_skill(
+        skill_template.read_text(encoding="utf-8"), paths
+    ).encode("utf-8")
     wrapper = _primary_wrapper_text(paths).encode("utf-8")
     _write_atomic(paths.primary_wrapper, wrapper, mode=0o600)
-    skill_template = _instruction_template(state, PLUGIN_FILES[2])
-    _write_atomic(
-        paths.primary_skill,
-        _rewrite_primary_skill(
-            skill_template.read_text(encoding="utf-8"),
-            paths,
-        ).encode("utf-8"),
-        mode=0o600,
-    )
+    _write_atomic(paths.primary_skill, instructions, mode=0o600)
     _write_atomic(
         paths.primary_node_repl,
         _primary_node_repl_shim_text(paths).encode("utf-8"),
         mode=0o700,
     )
-    assets = _asset_paths(state / "control" / PLUGIN_ASSETS_NAME)
-    _write_atomic(
-        assets.wrapper,
-        wrapper,
-        mode=0o600,
-    )
-    for relative, destination in (
-        (PLUGIN_FILES[1], assets.node_repl_instructions),
-        (PLUGIN_FILES[2], assets.skill),
-    ):
-        source = _instruction_template(state, relative)
-        _write_atomic(
-            destination,
-            _rewrite_instructions(source.read_text(encoding="utf-8")).encode("utf-8"),
-            mode=0o600,
-        )
+    assets = _asset_paths(control_root / PLUGIN_ASSETS_NAME)
+    _write_atomic(assets.wrapper, wrapper, mode=0o600)
+    for destination in (assets.node_repl_instructions, assets.skill):
+        _write_atomic(destination, instructions, mode=0o600)
     return assets
 
 
@@ -929,7 +923,7 @@ def apply_primary_control_config(
             "mcp_servers.node_repl.env",
             "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S",
             browser_client_hash,
-            None,
+            "NODE_REPL_TRUSTED_CODE_PATHS",
         ),
         (
             "mcp_servers.node_repl.env",
@@ -965,7 +959,7 @@ def apply_primary_control_config(
             "shell_environment_policy.set",
             "NODE_REPL_TRUSTED_CODE_PATHS",
             trusted_paths,
-            None,
+            "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S",
         ),
         (
             "shell_environment_policy.set",
