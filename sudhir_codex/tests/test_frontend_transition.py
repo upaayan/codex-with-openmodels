@@ -110,6 +110,10 @@ BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"
                 handle,
             )
         resources = self.app / "Contents" / "Resources"
+        executor = resources / "codex-cli/CodexCLI.app/Contents/MacOS/codex"
+        executor.parent.mkdir(parents=True)
+        executor.write_bytes(b"official-executor")
+        executor.chmod(0o755)
         (resources / "cua_node" / "bin").mkdir(parents=True)
         (resources / "cua_node" / "bin" / "node_repl").write_bytes(b"node-repl")
         (resources / "cua_node" / "bin" / "node").write_bytes(b"node")
@@ -300,6 +304,13 @@ BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"
             return {"browserClientSha256": "official-browser-hash"}
 
         with (
+            mock.patch.dict(
+                os.environ,
+                {
+                    "CODEX_APP_SERVER_FORCE_CLI": "1",
+                    "CODEX_TPP_LOCAL_EXECUTOR_CLI_PATH": "/wrong/custom-executor",
+                },
+            ),
             mock.patch(
                 "sudhir_codex_gateway.frontend_transition.sync_primary_control_runtime",
                 side_effect=sync_primary,
@@ -323,6 +334,16 @@ BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"
         self.assertEqual(events, ["sync", "launch"])
         sync.assert_called_once_with(self.paths)
         command = run.call_args.args[0]
+        self.assertEqual(command.count("CODEX_APP_SERVER_FORCE_CLI=0"), 1)
+        self.assertNotIn("CODEX_APP_SERVER_FORCE_CLI=1", command)
+        executor_setting = (
+            "CODEX_TPP_LOCAL_EXECUTOR_CLI_PATH="
+            f"{self.app}/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"
+        )
+        self.assertEqual(command.count(executor_setting), 1)
+        self.assertNotIn(
+            "CODEX_TPP_LOCAL_EXECUTOR_CLI_PATH=/wrong/custom-executor", command
+        )
         self.assertIn(f"CODEX_HOME={self.primary}", command)
         self.assertIn(f"SUDHIR_CODEX_STATE={self.primary}", command)
         self.assertIn(f"SUDHIR_CODEX_GATEWAY_STATE={self.primary}", command)
@@ -337,6 +358,37 @@ BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"
         self.assertNotIn(f"CODEX_NODE_REPL_PATH={control.node_repl}", command)
         self.assertIn(f"CODEX_BROWSER_USE_NODE_PATH={control.node}", command)
         self.assertIn(f"--user-data-dir={self.profile}", command)
+
+    def test_launch_primary_rejects_unusable_official_cloud_executor(self) -> None:
+        executor = (
+            self.app
+            / "Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"
+        )
+        for failure in ("missing", "not executable"):
+            with self.subTest(failure=failure):
+                if failure == "missing":
+                    executor.unlink()
+                else:
+                    executor.write_bytes(b"official-executor")
+                with (
+                    mock.patch(
+                        "sudhir_codex_gateway.frontend_transition.os.access",
+                        return_value=False,
+                    ),
+                    mock.patch.object(
+                        frontend_transition, "sync_primary_control_runtime"
+                    ) as sync,
+                    mock.patch.object(frontend_transition, "runtime_status") as status,
+                    mock.patch.object(frontend_transition.subprocess, "run") as run,
+                ):
+                    with self.assertRaisesRegex(
+                        frontend_transition.TransitionError,
+                        "Official cloud executor is missing or not executable",
+                    ):
+                        frontend_transition.launch_primary(self.paths)
+                sync.assert_not_called()
+                status.assert_not_called()
+                run.assert_not_called()
 
     def test_ensure_activates_healthy_transition_without_relaunch(self) -> None:
         healthy = {

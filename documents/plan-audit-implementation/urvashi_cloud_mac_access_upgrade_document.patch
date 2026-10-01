@@ -1,0 +1,41 @@
+Apply with git apply --unidiff-zero (check first); this is only the private upgrade document delta.
+--- a/documents/BACKEND-MONTHLY-UPGRADE.md
++++ b/documents/BACKEND-MONTHLY-UPGRADE.md
+@@ -309,0 +310,37 @@
++
++### Urvashi cloud-to-Mac preservation — 2026-10-01
++
++Extend the preceding Computer Use preservation unit with
++`frontend_transition.py::launch_primary`, its explicit cloud websocket and
++signed local-executor selectors, these two exact tests in
++`test_frontend_transition.FrontendTransitionTests`, and their `GATEWAY_TESTS`
++entries:
++
++- `test_launch_primary_provisions_stable_computer_use_before_launch`;
++- `test_launch_primary_rejects_unusable_official_cloud_executor`.
++
++Carry source, tests, manifest membership and relevant operational documentation
++as one tracked patch through backend rebases, gateway source replacement and
++future publication candidates. Run the exact command in
++[FRONTEND-UPDATE.md](FRONTEND-UPDATE.md#urvashi-cloud-to-mac-launch-boundary--2026-10-01)
++against candidate source/tests before acceptance, and again after activation.
++Reject a candidate that omits either exact test, removes either manifest entry,
++loses the existing CI invocation, or fails the behavior. Preserve the earlier
++Computer Use cases too. The current `gateway-linux` manifest lane is sufficient;
++this repair does not add a general register/framework or platform migration.
++
++An editable install/source-directory parity check alone does not preserve tests
++or manifest entries. The separate publication checkout must carry this whole
++patch before it supplies a future release; reconciliation of that repository is
++not implicit in this repair. Preserve a task-only reversible patch/commit and
++verify the repair commit is present on the selected existing remote before
++claiming remote durability. Record the actual commit in the implementation
++record once authorized and created.
++
++The executor path is resolved from the installed official app each launch.
++After official desktop updates, recheck the two internal selectors, executable
++layout, OpenAI signature and real Urvashi Mac execution. Upstream interface
++changes block acceptance until this same small integration is adjusted and
++checked. Before activation, prepare tested task-only reversal and backups of any
++affected configuration/control outputs; never overwrite unrelated edits or an
++entire private home. Gateway restart and desktop relaunch are separate steps.

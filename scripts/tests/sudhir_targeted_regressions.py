@@ -19,6 +19,7 @@ GATEWAY_TESTS = (
     "test_frontend_transition.FrontendTransitionTests.test_transition_template_recovery_uses_transition_backups",
     "test_frontend_transition.FrontendTransitionTests.test_primary_control_reports_missing_instruction_sources",
     "test_frontend_transition.FrontendTransitionTests.test_launch_primary_provisions_stable_computer_use_before_launch",
+    "test_frontend_transition.FrontendTransitionTests.test_launch_primary_rejects_unusable_official_cloud_executor",
     "test_frontend_transition.FrontendTransitionTests.test_primary_wrapper_uses_matching_legacy_client_and_starts_helper",
     "test_frontend_transition.FrontendTransitionTests.test_primary_node_repl_shim_overrides_poisoned_frontend_environment",
     "test_frontend_transition.FrontendTransitionTests.test_primary_local_skill_uses_stable_wrapper_outside_plugin_cache",

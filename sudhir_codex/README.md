@@ -5,6 +5,22 @@ private loopback gateway. The gateway presents Codex-subscription GPT models
 and compatible non-Codex models in Pi's registry, plus four Cursor Composer
 routes, as one model catalog.
 
+## Urvashi cloud access on macOS
+
+The primary desktop launch keeps ordinary chats on sudhir-codex and its gateway,
+while the durable Urvashi/Dot host uses the official cloud websocket and the
+installed OpenAI-signed CLI for local Mac execution. The gateway-owned launcher
+sets `CODEX_APP_SERVER_FORCE_CLI=0` and `CODEX_TPP_LOCAL_EXECUTOR_CLI_PATH`; it
+retains the custom local CLI, state/profile and Computer Use shim. The official
+executor must exist and be executable before launch.
+
+Follow [frontend activation and exact checks](../documents/FRONTEND-UPDATE.md#urvashi-cloud-to-mac-launch-boundary--2026-10-01),
+[upgrade preservation](../documents/BACKEND-MONTHLY-UPGRADE.md#urvashi-cloud-to-mac-preservation--2026-10-01)
+and the [repair runbook](../documents/SUDHIR-CODEX-REPAIR-RUNBOOK.md#urvashi-cloud-mac-access--2026-10-01).
+Restarting the gateway does not replace an already-running desktop's launch
+environment. Prepare tested task-only rollback before activation and require
+real cloud-to-Mac execution plus preserved local behavior before acceptance.
+
 ## What is independent
 
 - Source and build: `<checkout>`

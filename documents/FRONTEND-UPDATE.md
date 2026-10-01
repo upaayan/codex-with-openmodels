@@ -1,5 +1,59 @@
 # Sudhir-Codex frontend update
 
+## Urvashi cloud-to-Mac launch boundary — 2026-10-01
+
+The gateway-owned `frontend_transition.launch_primary` now explicitly sets
+`CODEX_APP_SERVER_FORCE_CLI=0` and `CODEX_TPP_LOCAL_EXECUTOR_CLI_PATH` to the
+executable at `Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex`
+inside the installed official app. The first restores the durable cloud host's
+websocket; the second selects the OpenAI-signed executor for cloud-to-Mac work.
+An absent/non-executable official executor stops launch before provisioning;
+it must not silently fall back to the custom core. The path is resolved from
+`paths.official_app` at launch, without a version pin or copied binary.
+
+Ordinary local chats retain `CODEX_CLI_PATH=~/.local/bin/sudhir-codex`, their
+private home/profile, the gateway, Pi settings and stable Computer Use shim.
+The provider's `supports_websockets=false` is an inference transport setting;
+it is not the cloud app-server flag and remains unchanged. These desktop
+selectors are observed internal interfaces: recheck them after official app
+updates. No official app, signature or native trust policy is modified.
+
+The exact repair tests are:
+
+```bash
+PYTHONPATH="$PWD/sudhir_codex/src:$PWD/sudhir_codex/tests" .venv/bin/python -m unittest -v \
+  test_frontend_transition.FrontendTransitionTests.test_launch_primary_provisions_stable_computer_use_before_launch \
+  test_frontend_transition.FrontendTransitionTests.test_launch_primary_rejects_unusable_official_cloud_executor
+.venv/bin/python scripts/tests/sudhir_targeted_regressions.py gateway
+```
+
+Run from the candidate repository root before upgrade acceptance and again
+from the activated source. Both exact tests must remain in `GATEWAY_TESTS`, and
+source CI must still invoke that manifest. Also retain the earlier Computer Use
+preservation checks below. Before live acceptance, verify the cloud websocket
+and cloud thread resume, then ask Urvashi to list apps and execute a harmless
+read-only program such as `/usr/bin/sw_vers` on this Mac. Native authorization
+and the real returned output must succeed; rendezvous alone is insufficient.
+Verify ordinary local model switching/history/tool use, concurrent custom
+agents and stable local Computer Use as well. These are acceptance requirements,
+not a claim that the mixed launch has already passed live verification.
+
+Restart the gateway after changing its source using the existing management
+`stop` then `start` commands, and require healthy status. Gateway restart does
+not change an already-running desktop's launch environment. A relaunch through
+`/Applications/Sudhir-Codex.app` is needed for the new selectors; obtain owner
+direction before interrupting an active official desktop session.
+
+Every change must be reversible. Before activation retain pre-change contents,
+a task-only reverse patch, and exact rollback instructions; verify reversal on
+disposable copies. Include tests, manifest, documents and any task-caused
+configuration/control output changes, preserving unrelated local edits. Do not
+use a whole-repository reset or full-state copy. A failed live acceptance blocks
+success; use the prepared rollback under owner direction and verify the previous
+local behavior. See the repair's plan/implementation/audit records in
+`documents/plan-audit-implementation/urvashi_cloud_mac_access_*` and the supplied
+rollback instructions. Recovery is prepared, not an automatic rollback service.
+
 ## Current procedure — 2026-09-04
 
 `/Applications/Sudhir-Codex.app` is the small signed launcher. It runs

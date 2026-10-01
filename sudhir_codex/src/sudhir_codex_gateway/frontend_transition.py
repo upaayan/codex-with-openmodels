@@ -152,6 +152,14 @@ def launch(paths: TransitionPaths) -> None:
 def launch_primary(paths: TransitionPaths) -> None:
     """Launch the standard frontend with the primary Sudhir-Codex home."""
 
+    official_executor = (
+        paths.official_app
+        / "Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"
+    )
+    if not official_executor.is_file() or not os.access(official_executor, os.X_OK):
+        raise TransitionError(
+            f"Official cloud executor is missing or not executable: {official_executor}"
+        )
     control = paths.control_runtime
     control_status = runtime_status(control)
     if control_status.get("ready") is not True:
@@ -184,7 +192,9 @@ def launch_primary(paths: TransitionPaths) -> None:
         "--env",
         f"SUDHIR_CODEX_PI_AGENT_DIR={paths.pi_agent_dir}",
         "--env",
-        "CODEX_APP_SERVER_FORCE_CLI=1",
+        "CODEX_APP_SERVER_FORCE_CLI=0",
+        "--env",
+        f"CODEX_TPP_LOCAL_EXECUTOR_CLI_PATH={official_executor}",
         "--env",
         f"CODEX_NODE_REPL_PATH={control.primary_node_repl}",
         "--env",

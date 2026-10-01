@@ -634,6 +634,42 @@ replaces it. Protect gateway changes with git, not the launcher: verify the
 commit is pushed before considering it durable. Restore a committed gateway
 change with `git checkout <commit> -- <file>`.
 
+## Urvashi cloud Mac access — 2026-10-01
+
+If ordinary sudhir-codex chats work but Urvashi cannot resume/access this Mac,
+inspect the durable host in the desktop log. Durable stdio with custom core
+version and `no rollout found` indicates that the cloud connection was forced
+onto the local backend. `missing-code-signing-identity`, an untrusted native
+peer, or pipe closure is a separate execution-boundary failure. A connected
+executor rendezvous does not prove that native Mac operations work.
+
+The bounded repair lives in the gateway package's
+`frontend_transition.py::launch_primary`: explicit `CODEX_APP_SERVER_FORCE_CLI=0`
+and `CODEX_TPP_LOCAL_EXECUTOR_CLI_PATH` selecting the existing OpenAI-signed CLI
+inside the installed official app. Ordinary `CODEX_CLI_PATH`, private home and
+local Computer Use shim remain custom. Do not alter the inference router or its
+websocket setting, re-sign the custom core as a supposed substitute for OpenAI
+identity, weaken peer authorization, or patch the official app.
+
+Use the exact two repair tests, upgrade preservation unit and live acceptance
+steps in [FRONTEND-UPDATE.md](FRONTEND-UPDATE.md#urvashi-cloud-to-mac-launch-boundary--2026-10-01).
+Missing/non-executable official CLI stops launch before provisioning; investigate
+the installed app layout rather than silently selecting the custom executor.
+After an authorized gateway restart, a separately owner-directed desktop
+relaunch is needed to load the new environment. Require actual Urvashi app
+access/program output and preserved local custom behavior before declaring the
+repair successful. On failure stop at the evidence and return the smallest next
+choice to the owner.
+
+Prepare exact, tested task-only rollback instructions before activation. Retain
+pre-change contents for every affected source/test/manifest/document and any
+changed configuration/control output. Preserve unrelated edits; do not use a
+whole-file checkout, repository reset or complete-state replacement as a blanket
+rollback. Restore only task-caused changes, restart the gateway when applicable,
+then perform the approved desktop relaunch and verify the previous local setup.
+Rollback materials remain available until owner acceptance; automatic rollback
+is not introduced.
+
 ## 8. App-server or gateway is not running
 
 ### 8.1 Verify required executables and state
