@@ -108,7 +108,7 @@ jobs:
             codex-code-mode-host \
             codex-responses-api-proxy
 
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: macos-release-archive
           path: codex-with-openmodels-aarch64-apple-darwin.tar.gz
@@ -265,7 +265,7 @@ jobs:
             codex-responses-api-proxy \
             codex-resources/bwrap
 
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ubuntu-release-archive
           path: codex-with-openmodels-x86_64-unknown-linux-musl.tar.gz
@@ -307,7 +307,7 @@ jobs:
           sha256sum "${expected[@]}" > SHA256SUMS
           sha256sum -c SHA256SUMS
 
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: complete-release-candidate
           path: release-assets/*
