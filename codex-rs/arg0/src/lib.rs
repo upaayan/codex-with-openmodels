@@ -14,8 +14,6 @@ use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use codex_utils_home_dir::find_codex_home;
 #[cfg(target_os = "windows")]
 use codex_windows_sandbox::CODEX_WINDOWS_SANDBOX_ARG1;
-#[cfg(unix)]
-use std::os::unix::fs::symlink;
 use tempfile::TempDir;
 
 const APPLY_PATCH_ARG0: &str = "apply_patch";
@@ -34,6 +32,10 @@ pub struct Arg0DispatchPaths {
     /// Always absent; retained for clients that still pass the retired wrapper path.
     pub main_execve_wrapper_exe: Option<PathBuf>,
 }
+
+#[cfg(test)]
+#[path = "sudhir_arg0_contracts_tests.rs"]
+mod sudhir_arg0_contracts_tests;
 
 /// Keeps the per-session PATH entry alive and locked for the process lifetime.
 pub struct Arg0PathEntryGuard {
@@ -295,7 +297,7 @@ where
 
 /// Creates a temporary directory with either:
 ///
-/// - UNIX: `apply_patch` symlink to the current executable
+/// - UNIX: `apply_patch` hard link or copied alias to the current executable
 /// - WINDOWS: `apply_patch.bat` batch script to invoke the current executable
 ///   with the hidden `--codex-run-as-apply-patch` flag.
 ///
@@ -306,6 +308,26 @@ where
 /// Note: In debug builds the temp-dir guard is disabled to ease local testing.
 ///
 /// IMPORTANT: Callers must update PATH before multiple threads are spawned.
+#[cfg(unix)]
+fn create_unix_alias(executable: &Path, alias: &Path) -> std::io::Result<()> {
+    match std::fs::hard_link(executable, alias) {
+        Ok(()) => Ok(()),
+        Err(hard_link_error) => {
+            std::fs::copy(executable, alias)
+                .map(|_| ())
+                .map_err(|copy_error| {
+                    std::io::Error::new(
+                        copy_error.kind(),
+                        format!(
+                            "failed to create hard-link alias {alias:?}: {hard_link_error}; \
+                         copy fallback failed: {copy_error}"
+                        ),
+                    )
+                })
+        }
+    }
+}
+
 fn prepare_path_entry_for_codex_aliases(
     existing_path: Option<OsString>,
 ) -> std::io::Result<(Arg0PathEntryGuard, OsString)> {
@@ -367,18 +389,17 @@ fn prepare_aliases_in_home(
         .open(&lock_path)?;
     lock_file.try_lock()?;
 
+    let exe = std::env::current_exe()?;
     for filename in &[
         APPLY_PATCH_ARG0,
         MISSPELLED_APPLY_PATCH_ARG0,
         #[cfg(target_os = "linux")]
         CODEX_LINUX_SANDBOX_ARG0,
     ] {
-        let exe = std::env::current_exe()?;
-
         #[cfg(unix)]
         {
-            let link = path.join(filename);
-            symlink(&exe, &link)?;
+            let alias = path.join(filename);
+            create_unix_alias(&exe, &alias)?;
         }
 
         #[cfg(windows)]
@@ -735,6 +756,38 @@ mod tests {
                 Ok(())
             },
         ))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_aliases_are_regular_files_and_guard_cleanup_removes_them() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let temp_dir = tempfile::Builder::new()
+            .prefix("codex-arg0")
+            .tempdir_in(root.path())?;
+        let session_path = temp_dir.path().to_path_buf();
+        let lock_file = create_lock(temp_dir.path())?;
+        let executable = std::env::current_exe()?;
+
+        for filename in &[
+            super::APPLY_PATCH_ARG0,
+            super::MISSPELLED_APPLY_PATCH_ARG0,
+            #[cfg(target_os = "linux")]
+            codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0,
+            super::EXECVE_WRAPPER_ARG0,
+        ] {
+            let alias = temp_dir.path().join(filename);
+            super::create_unix_alias(&executable, &alias)?;
+            let metadata = fs::symlink_metadata(&alias)?;
+            assert!(metadata.is_file());
+            assert!(!metadata.file_type().is_symlink());
+        }
+
+        let guard = Arg0PathEntryGuard::new(temp_dir, lock_file, Arg0DispatchPaths::default());
+        drop(guard);
+
+        assert!(!session_path.exists());
+        Ok(())
     }
 
     #[test]

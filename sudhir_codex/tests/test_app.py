@@ -1,0 +1,1689 @@
+import base64
+import concurrent.futures
+import json
+import os
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import httpx
+
+from helpers import basic_pi_document
+from helpers import make_repo
+from helpers import write_json
+from sudhir_codex_gateway.app import BufferedResponse
+from sudhir_codex_gateway.catalog_version import CatalogVersion
+
+from sudhir_codex_gateway.app import GATEWAY_TOKEN_HEADER
+from sudhir_codex_gateway.app import GatewayApp
+from sudhir_codex_gateway.app import GatewaySettings
+from sudhir_codex_gateway.app import StreamingResponse
+from sudhir_codex_gateway.cursor_prompt import estimate_prompt_tokens
+from sudhir_codex_gateway.cursor_catalog import CURSOR_MODEL_ROUTES
+from sudhir_codex_gateway.cursor_worker import CursorTurnResult
+from sudhir_codex_gateway.errors import GatewayError
+from sudhir_codex_gateway.credentials import ResolvedRequestAuth
+from sudhir_codex_gateway.pi_auth_worker import PiAuthResult
+from sudhir_codex_gateway.pi_auth_worker import PiInferenceHTTPError
+from sudhir_codex_gateway.pi_auth_worker import PiInferenceResult
+from sudhir_codex_gateway.visibility import apply_model_visibility
+
+
+CHATGPT_CLIENT_VERSION = "0.153.4"
+
+
+class GatewayAppTests(unittest.TestCase):
+    def setUp(self) -> None:
+        version_patch = patch("sudhir_codex_gateway.app.resolve_catalog_version", return_value=CatalogVersion(CHATGPT_CLIENT_VERSION, CHATGPT_CLIENT_VERSION, None, None))
+        version_patch.start()
+        self.addCleanup(version_patch.stop)
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.repo = make_repo(self.root / "repo")
+        self.state = self.root / "state"
+        self.pi = self.root / "pi"
+        write_json(self.pi / "models.json", basic_pi_document())
+        write_json(
+            self.pi / "auth.json",
+            {"demo": {"type": "api_key", "key": "pi-secret"}},
+        )
+        self.settings = GatewaySettings(
+            repo_root=self.repo,
+            state_dir=self.state,
+            pi_agent_dir=self.pi,
+            gateway_token="gateway-secret",
+            chatgpt_base_url="https://chatgpt.test/backend-api/codex",
+        )
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def test_health_identifies_the_gateway_process(self) -> None:
+        app = GatewayApp(
+            self.settings,
+            http_client=httpx.Client(
+                transport=httpx.MockTransport(
+                    lambda _request: self.fail("Health check used HTTP transport")
+                )
+            ),
+        )
+        try:
+            response = app.health()
+        finally:
+            app.close()
+
+        self.assertEqual(
+            json.loads(response.body),
+            {
+                "ok": True,
+                "service": "sudhir-codex-gateway",
+                "instance_id": self.settings.instance_id,
+                "pid": os.getpid(),
+                "catalog_version": CatalogVersion(CHATGPT_CLIENT_VERSION, CHATGPT_CLIENT_VERSION, None, None).document(),
+            },
+        )
+
+    def test_dsh_gpt_auth_uses_pi_for_catalog_and_response(self) -> None:
+        claims = base64.urlsafe_b64encode(json.dumps({
+            "https://api.openai.com/auth": {"chatgpt_account_id": "pi-account"}
+        }).encode()).decode().rstrip("=")
+        access = f"fixture.{claims}.signature"
+        write_json(self.pi / "auth.json", {"openai-codex": {"type": "oauth"}})
+
+        class Worker:
+            def __init__(self):
+                self.calls = []
+
+            def resolve(self, model):
+                self.calls.append((model.provider_id, model.upstream_id, model.api))
+                return PiAuthResult(model.provider_id, model.upstream_id, model.api, access, {}, None)
+
+            def close(self):
+                pass
+
+        for incoming in (
+            {"Authorization": "Bearer gateway-secret", "ChatGPT-Account-Id": "wrong-account"},
+            {GATEWAY_TOKEN_HEADER: "gateway-secret"},
+        ):
+            with self.subTest(incoming_keys=list(incoming)):
+                observed = []
+
+                def handler(request):
+                    observed.append((request.method, dict(request.headers)))
+                    if request.method == "GET":
+                        return httpx.Response(200, json={"models": [{"slug": "gpt-test", "visibility": "list"}]})
+                    self.assertEqual(json.loads(request.content), {"model": "gpt-test", "input": [], "stream": True})
+                    return httpx.Response(200, content=b"data: {}\n\n")
+
+                worker = Worker()
+                app = GatewayApp(self.settings, http_client=httpx.Client(transport=httpx.MockTransport(handler)), pi_auth_worker=worker)
+                try:
+                    response = app.responses(incoming, b'{"model":"gpt-test","input":[],"stream":true,"max_output_tokens":4096}')
+                    response.response.close()
+                finally:
+                    app.close()
+                self.assertEqual(worker.calls, [
+                    ("openai-codex", "gpt-5.5", "openai-codex-responses"),
+                    ("openai-codex", "gpt-test", "openai-codex-responses"),
+                ])
+                self.assertEqual([method for method, _ in observed], ["GET", "POST"])
+                for _, headers in observed:
+                    self.assertEqual(headers["authorization"], "Bearer " + access)
+                    self.assertEqual(headers["chatgpt-account-id"], "pi-account")
+                    self.assertNotIn(GATEWAY_TOKEN_HEADER.lower(), headers)
+                    self.assertNotIn("gateway-secret", str(headers))
+                audit = self.settings.route_audit_path.read_text()
+                self.assertNotIn(access, audit)
+                self.assertNotIn("pi-account", audit)
+
+    def test_native_gpt_body_is_not_rewritten_for_dsh_compatibility(self) -> None:
+        body = {"model": "gpt-test", "input": [], "stream": True, "max_output_tokens": 4096}
+        observed = []
+        def handler(request):
+            observed.append(json.loads(request.content))
+            return httpx.Response(200, content=b"data: {}\n\n")
+        app = GatewayApp(self.settings, http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+        app._gpt_model_ids = frozenset({"gpt-test"})
+        try:
+            response = app.responses({"Authorization": "Bearer native-fixture", GATEWAY_TOKEN_HEADER: "gateway-secret"}, json.dumps(body).encode())
+            response.response.close()
+        finally:
+            app.close()
+        self.assertEqual(observed, [body])
+
+    def test_dsh_shared_auth_failure_does_not_forward_gateway_token(self) -> None:
+        app = GatewayApp(self.settings, http_client=httpx.Client(transport=httpx.MockTransport(
+            lambda _request: self.fail("Invalid shared auth reached upstream")
+        )))
+        app._gpt_model_ids = frozenset({"gpt-test"})
+        try:
+            with self.assertRaises(GatewayError) as missing:
+                app.responses({"Authorization": "Bearer gateway-secret"}, b'{"model":"gpt-test"}')
+            self.assertEqual(missing.exception.code, "pi_credential_missing")
+            with patch.object(app.credentials, "resolve", return_value=ResolvedRequestAuth({"Authorization": "Bearer invalid-fixture"})):
+                with self.assertRaises(GatewayError) as invalid:
+                    app.responses({"Authorization": "Bearer gateway-secret"}, b'{"model":"gpt-test"}')
+                self.assertEqual(invalid.exception.code, "pi_codex_auth_invalid")
+        finally:
+            app.close()
+
+    def test_pi_request_receives_only_pi_credential(self) -> None:
+        observed: dict[str, object] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            observed["url"] = str(request.url)
+            observed["authorization"] = request.headers.get("authorization")
+            observed["account"] = request.headers.get("chatgpt-account-id")
+            observed["gateway"] = request.headers.get(GATEWAY_TOKEN_HEADER.lower())
+            observed["cookie"] = request.headers.get("cookie")
+            observed["body"] = json.loads(request.content)
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": "Pi replied",
+                            }
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 4,
+                        "completion_tokens": 2,
+                        "total_tokens": 6,
+                    },
+                },
+            )
+
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        app = GatewayApp(self.settings, http_client=client)
+        try:
+            response = app.responses(
+                {
+                    "Authorization": "Bearer chatgpt-secret",
+                    "ChatGPT-Account-Id": "account-secret",
+                    GATEWAY_TOKEN_HEADER: "gateway-secret",
+                },
+                json.dumps(
+                    {
+                        "model": "pi-demo/demo/model",
+                        "instructions": "Be concise",
+                        "input": [
+                            {
+                                "type": "message",
+                                "role": "user",
+                                "content": [
+                                    {"type": "input_text", "text": "hello-private"}
+                                ],
+                            }
+                        ],
+                        "stream": True,
+                    }
+                ).encode(),
+            )
+        finally:
+            app.close()
+
+        self.assertIsInstance(response, BufferedResponse)
+        self.assertEqual(observed["url"], "https://pi.test/v1/chat/completions")
+        self.assertEqual(observed["authorization"], "Bearer pi-secret")
+        self.assertIsNone(observed["account"])
+        self.assertIsNone(observed["gateway"])
+        self.assertEqual(observed["body"]["model"], "demo/model")
+        self.assertIn(b"Pi replied", response.body)
+
+        audit = self.settings.route_audit_path.read_text(encoding="utf-8")
+        self.assertNotIn("hello-private", audit)
+        self.assertNotIn("pi-secret", audit)
+        self.assertNotIn("chatgpt-secret", audit)
+        self.assertNotIn("account-secret", audit)
+
+    def test_pi_provider_error_preserves_status_body_and_request_id(self) -> None:
+        cases = (
+            (
+                400,
+                b'{"error":{"message":"414 tools exceeds maximum 350"}}\n',
+                {
+                    "X-Request-Id": "xai-request-400",
+                    "Set-Cookie": "provider-secret=must-not-leak",
+                },
+                "application/json",
+            ),
+            (
+                401,
+                b'{"error":{"message":"provider credential expired"}}',
+                {
+                    "Content-Type": "application/problem+json",
+                    "Request-Id": "provider-request-401",
+                },
+                "application/problem+json",
+            ),
+        )
+
+        for status, body, headers, expected_content_type in cases:
+            with self.subTest(status=status):
+                def handler(_request: httpx.Request) -> httpx.Response:
+                    return httpx.Response(status, headers=headers, content=body)
+
+                app = GatewayApp(
+                    self.settings,
+                    http_client=httpx.Client(
+                        transport=httpx.MockTransport(handler)
+                    ),
+                )
+                try:
+                    response = app.responses(
+                        {GATEWAY_TOKEN_HEADER: "gateway-secret"},
+                        json.dumps(
+                            {
+                                "model": "pi-demo/demo/model",
+                                "input": [
+                                    {
+                                        "type": "message",
+                                        "role": "user",
+                                        "content": [
+                                            {"type": "input_text", "text": "hello"}
+                                        ],
+                                    }
+                                ],
+                            }
+                        ).encode(),
+                    )
+                finally:
+                    app.close()
+
+                self.assertIsInstance(response, BufferedResponse)
+                self.assertEqual(response.status, status)
+                self.assertEqual(
+                    response.headers["content-type"], expected_content_type
+                )
+                self.assertEqual(response.body, body)
+                for name, value in headers.items():
+                    if name.lower() in {"request-id", "x-request-id"}:
+                        self.assertEqual(response.headers[name.lower()], value)
+                self.assertNotIn("set-cookie", response.headers)
+
+    def test_cursor_request_uses_the_native_worker_and_returns_responses_sse(
+        self,
+    ) -> None:
+        class FakeCursorWorker:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, object]] = []
+                self.closed = False
+
+            def turn(self, **kwargs: object) -> CursorTurnResult:
+                self.calls.append(kwargs)
+                return CursorTurnResult(
+                    text="Composer replied",
+                    input_tokens=11,
+                    output_tokens=5,
+                    tool_calls=2,
+                )
+
+            def close(self) -> None:
+                self.closed = True
+
+        worker = FakeCursorWorker()
+        app = GatewayApp(
+            self.settings,
+            http_client=httpx.Client(
+                transport=httpx.MockTransport(
+                    lambda _request: self.fail("Cursor route used HTTP transport")
+                )
+            ),
+            cursor_worker=worker,
+        )
+        try:
+            response = app.responses(
+                {
+                    GATEWAY_TOKEN_HEADER: "gateway-secret",
+                    "thread-id": "thread-cursor",
+                },
+                json.dumps(
+                    {
+                        "model": "cursor/composer-latest-slow",
+                        "instructions": "Be concise.",
+                        "input": [
+                            {
+                                "type": "message",
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "input_text",
+                                        "text": (
+                                            "<environment_context>\n"
+                                            f"<cwd>{self.root}</cwd>\n"
+                                            "</environment_context>"
+                                        ),
+                                    },
+                                    {
+                                        "type": "input_text",
+                                        "text": "Inspect this repo.",
+                                    },
+                                ],
+                            }
+                        ],
+                        "stream": True,
+                    }
+                ).encode(),
+            )
+        finally:
+            app.close()
+
+        self.assertIsInstance(response, BufferedResponse)
+        self.assertIn(b"Composer replied", response.body)
+        self.assertEqual(len(worker.calls), 1)
+        self.assertEqual(
+            worker.calls[0]["model_id"],
+            "cursor/composer-latest-slow",
+        )
+        self.assertEqual(worker.calls[0]["cwd"], self.root)
+        self.assertEqual(worker.calls[0]["thread_id"], "thread-cursor")
+        prompt = worker.calls[0]["prompt"]
+        self.assertIsInstance(prompt, str)
+        expected_input = estimate_prompt_tokens(prompt)
+        self.assertGreater(expected_input, 0)
+        self.assertNotEqual(expected_input, 11)
+        completed = next(
+            event
+            for line in response.body.decode().splitlines()
+            if line.startswith("data: ")
+            for event in [json.loads(line.removeprefix("data: "))]
+            if event.get("type") == "response.completed"
+        )
+        usage = completed["response"]["usage"]
+        self.assertEqual(usage["input_tokens"], expected_input)
+        self.assertEqual(usage["output_tokens"], 5)
+        self.assertTrue(worker.closed)
+
+        audit = self.settings.route_audit_path.read_text(encoding="utf-8")
+        self.assertIn('"provider_id":"cursor"', audit)
+        self.assertNotIn("Inspect this repo.", audit)
+
+    def test_cursor_thread_reuses_last_verified_cwd(self) -> None:
+        class FakeCursorWorker:
+            def __init__(self) -> None:
+                self.cwds: list[Path] = []
+
+            def turn(self, **kwargs: object) -> CursorTurnResult:
+                self.cwds.append(kwargs["cwd"])
+                return CursorTurnResult("ok", 0, 0, 0)
+
+            def close(self) -> None:
+                return
+
+        worker = FakeCursorWorker()
+        app = GatewayApp(
+            self.settings,
+            http_client=httpx.Client(
+                transport=httpx.MockTransport(
+                    lambda _request: self.fail("Cursor route used HTTP transport")
+                )
+            ),
+            cursor_worker=worker,
+        )
+        headers = {"thread-id": "thread-cursor"}
+        try:
+            app.responses(
+                headers,
+                json.dumps(
+                    {
+                        "model": "cursor/composer-2.5-fast",
+                        "input": [
+                            {
+                                "type": "message",
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "input_text",
+                                        "text": f"<environment_context><cwd>{self.root}</cwd></environment_context>",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ).encode(),
+            )
+            app.responses(
+                headers,
+                json.dumps(
+                    {
+                        "model": "cursor/composer-2.5-slow",
+                        "input": [
+                            {
+                                "type": "message",
+                                "role": "user",
+                                "content": [
+                                    {"type": "input_text", "text": "Continue."}
+                                ],
+                            }
+                        ],
+                    }
+                ).encode(),
+            )
+        finally:
+            app.close()
+
+        self.assertEqual(worker.cwds, [self.root, self.root])
+
+    def test_anthropic_pi_request_uses_messages_transport(self) -> None:
+        document = basic_pi_document()
+        document["providers"]["demo"]["models"][0]["api"] = "anthropic-messages"
+        write_json(self.pi / "models.json", document)
+        observed: dict[str, object] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            observed["url"] = str(request.url)
+            observed["authorization"] = request.headers.get("authorization")
+            observed["api_key"] = request.headers.get("x-api-key")
+            observed["version"] = request.headers.get("anthropic-version")
+            observed["body"] = json.loads(request.content)
+            return httpx.Response(
+                200,
+                json={
+                    "id": "msg_test",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "thinking",
+                            "thinking": "hidden",
+                            "signature": "opaque",
+                        },
+                        {"type": "text", "text": "Messages replied"},
+                    ],
+                    "stop_reason": "end_turn",
+                    "usage": {
+                        "input_tokens": 4,
+                        "output_tokens": 2,
+                    },
+                },
+            )
+
+        app = GatewayApp(
+            self.settings,
+            http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        try:
+            response = app.responses(
+                {GATEWAY_TOKEN_HEADER: "gateway-secret"},
+                json.dumps(
+                    {
+                        "model": "pi-demo/demo/model",
+                        "instructions": "Be concise",
+                        "input": [
+                            {
+                                "type": "message",
+                                "role": "user",
+                                "content": [{"type": "input_text", "text": "hello"}],
+                            }
+                        ],
+                        "stream": True,
+                    }
+                ).encode(),
+            )
+        finally:
+            app.close()
+
+        self.assertIsInstance(response, BufferedResponse)
+        self.assertEqual(observed["url"], "https://pi.test/v1/messages")
+        self.assertIsNone(observed["authorization"])
+        self.assertEqual(observed["api_key"], "pi-secret")
+        self.assertEqual(observed["version"], "2023-06-01")
+        self.assertEqual(observed["body"]["system"], "Be concise")
+        self.assertEqual(observed["body"]["max_tokens"], 8192)
+        self.assertNotIn("reasoning_effort", observed["body"])
+        self.assertIn(b"Messages replied", response.body)
+
+    def test_native_google_routes_use_pi_runtime_instead_of_http_adapter(self) -> None:
+        write_json(
+            self.pi / "models.json",
+            {
+                "providers": {
+                    "google": {
+                        "api": "google-generative-ai",
+                        "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+                        "models": [
+                            {"id": "gemini-3.7-flash", "reasoning": True}
+                        ],
+                    },
+                    "google-vertex": {
+                        "models": [
+                            {"id": "gemini-3.7-flash", "reasoning": True}
+                        ]
+                    },
+                }
+            },
+        )
+
+        class FakePiRuntime:
+            def __init__(self) -> None:
+                self.calls: list[tuple[object, object, object]] = []
+                self.closed = False
+
+            def infer(self, model, chat_request, reasoning):
+                self.calls.append((model, chat_request, reasoning))
+                return PiInferenceResult(
+                    provider_id=model.provider_id,
+                    model_id=model.upstream_id,
+                    api=model.api,
+                    destination=(
+                        "aiplatform.googleapis.com"
+                        if model.api == "google-vertex"
+                        else "generativelanguage.googleapis.com"
+                    ),
+                    response={
+                        "choices": [
+                            {
+                                "message": {
+                                    "role": "assistant",
+                                    "content": f"{model.provider_id} replied",
+                                }
+                            }
+                        ],
+                        "usage": {
+                            "prompt_tokens": 4,
+                            "completion_tokens": 2,
+                            "total_tokens": 6,
+                        },
+                    },
+                )
+
+            def close(self) -> None:
+                self.closed = True
+
+        worker = FakePiRuntime()
+        app = GatewayApp(
+            self.settings,
+            http_client=httpx.Client(
+                transport=httpx.MockTransport(
+                    lambda _request: self.fail(
+                        "Native Google route used the HTTP compatibility adapter"
+                    )
+                )
+            ),
+            pi_auth_worker=worker,
+        )
+        try:
+            for provider in ("google", "google-vertex"):
+                response = app.responses(
+                    {GATEWAY_TOKEN_HEADER: "gateway-secret"},
+                    json.dumps(
+                        {
+                            "model": f"pi-{provider}/gemini-3.7-flash",
+                            "instructions": "Be concise",
+                            "input": [
+                                {
+                                    "type": "message",
+                                    "role": "user",
+                                    "content": [
+                                        {"type": "input_text", "text": "hello"}
+                                    ],
+                                }
+                            ],
+                            "reasoning": {"effort": "high"},
+                            "stream": True,
+                        }
+                    ).encode(),
+                )
+                self.assertIsInstance(response, BufferedResponse)
+                self.assertIn(f"{provider} replied".encode(), response.body)
+        finally:
+            app.close()
+
+        self.assertEqual(
+            [(call[0].provider_id, call[2]) for call in worker.calls],
+            [("google", "high"), ("google-vertex", "high")],
+        )
+        self.assertEqual(worker.calls[0][1]["messages"][0]["role"], "system")
+        self.assertTrue(worker.closed)
+        audit = self.settings.route_audit_path.read_text(encoding="utf-8")
+        self.assertIn('"provider_id":"google"', audit)
+        self.assertIn('"provider_id":"google-vertex"', audit)
+
+    def test_native_google_error_preserves_upstream_response(self) -> None:
+        write_json(
+            self.pi / "models.json",
+            {
+                "providers": {
+                    "google": {
+                        "api": "google-generative-ai",
+                        "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+                        "models": [{"id": "gemini-3.7-flash"}],
+                    }
+                }
+            },
+        )
+
+        class FailingPiRuntime:
+            def infer(self, _model, _chat_request, _reasoning):
+                raise PiInferenceHTTPError(
+                    429,
+                    {
+                        "content-type": "application/problem+json",
+                        "x-request-id": "google-request-429",
+                    },
+                    b'{"error":{"message":"quota exceeded"}}',
+                )
+
+            def close(self) -> None:
+                return
+
+        app = GatewayApp(self.settings, pi_auth_worker=FailingPiRuntime())
+        try:
+            response = app.responses(
+                {GATEWAY_TOKEN_HEADER: "gateway-secret"},
+                json.dumps(
+                    {
+                        "model": "pi-google/gemini-3.7-flash",
+                        "input": [
+                            {
+                                "type": "message",
+                                "role": "user",
+                                "content": [{"type": "input_text", "text": "hello"}],
+                            }
+                        ],
+                    }
+                ).encode(),
+            )
+        finally:
+            app.close()
+
+        self.assertEqual(
+            response,
+            BufferedResponse(
+                status=429,
+                headers={
+                    "content-type": "application/problem+json",
+                    "x-request-id": "google-request-429",
+                },
+                body=b'{"error":{"message":"quota exceeded"}}',
+            ),
+        )
+
+    def test_xai_grok45_uses_responses_transport(self) -> None:
+        write_json(
+            self.pi / "models.json",
+            {
+                "providers": {
+                    "xai": {
+                        "models": [
+                            {
+                                "id": "grok-4.5",
+                                "reasoning": True,
+                                "input": ["text", "image"],
+                                "contextWindow": 500_000,
+                                "maxTokens": 500_000,
+                            }
+                        ]
+                    }
+                }
+            },
+        )
+        write_json(
+            self.pi / "auth.json",
+            {
+                "xai": {
+                    "type": "oauth",
+                    "access": "xai-secret",
+                    "refresh": "xai-refresh",
+                    "expires": 9_999_999_999_999,
+                }
+            },
+        )
+        observed: dict[str, object] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            observed["url"] = str(request.url)
+            observed["authorization"] = request.headers.get("authorization")
+            observed["body"] = json.loads(request.content)
+            if request.url.path.endswith("/responses"):
+                return httpx.Response(
+                    200,
+                    json={
+                        "id": "resp_xai",
+                        "status": "completed",
+                        "model": "grok-4.5",
+                        "output": [
+                            {
+                                "type": "reasoning",
+                                "id": "rs_xai",
+                                "status": "completed",
+                                "summary": [],
+                                "encrypted_content": "opaque-reasoning",
+                            },
+                            {
+                                "type": "message",
+                                "id": "msg_xai",
+                                "status": "completed",
+                                "role": "assistant",
+                                "content": [
+                                    {
+                                        "type": "output_text",
+                                        "text": "Grok replied",
+                                        "annotations": [],
+                                    }
+                                ],
+                            },
+                        ],
+                        "usage": {
+                            "input_tokens": 4,
+                            "output_tokens": 2,
+                            "total_tokens": 6,
+                        },
+                    },
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": "Wrong transport",
+                            }
+                        }
+                    ]
+                },
+            )
+
+        class XaiAuthWorker:
+            def resolve(self, _model):
+                return PiAuthResult(
+                    provider_id="xai",
+                    model_id="grok-4.5",
+                    api="openai-responses",
+                    api_key="xai-secret",
+                    headers={},
+                    base_url=None,
+                )
+
+            def close(self) -> None:
+                return None
+
+        app = GatewayApp(
+            self.settings,
+            http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+            pi_auth_worker=XaiAuthWorker(),
+        )
+        try:
+            response = app.responses(
+                {GATEWAY_TOKEN_HEADER: "gateway-secret"},
+                json.dumps(
+                    {
+                        "model": "pi-xai/grok-4.5",
+                        "instructions": "Be concise",
+                        "input": [
+                            {
+                                "type": "message",
+                                "role": "user",
+                                "content": [{"type": "input_text", "text": "hello"}],
+                            }
+                        ],
+                        "reasoning": {"effort": "high"},
+                        "stream": True,
+                    }
+                ).encode(),
+            )
+        finally:
+            app.close()
+
+        self.assertIsInstance(response, BufferedResponse)
+        self.assertEqual(observed["url"], "https://api.x.ai/v1/responses")
+        self.assertEqual(observed["authorization"], "Bearer xai-secret")
+        self.assertEqual(observed["body"]["model"], "grok-4.5")
+        self.assertEqual(observed["body"]["stream"], False)
+        self.assertEqual(observed["body"]["store"], False)
+        self.assertEqual(
+            observed["body"]["include"],
+            ["reasoning.encrypted_content"],
+        )
+        self.assertEqual(
+            observed["body"]["reasoning"],
+            {"effort": "high", "summary": "auto"},
+        )
+        self.assertNotIn("reasoning_effort", observed["body"])
+        self.assertIn(b"opaque-reasoning", response.body)
+        self.assertIn(b"Grok replied", response.body)
+
+    def test_gpt_request_keeps_chatgpt_auth_and_strips_gateway_secret(self) -> None:
+        observed: dict[str, object] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "GET":
+                return httpx.Response(
+                    200,
+                    json={
+                        "models": [
+                            {
+                                "slug": "gpt-test",
+                                "display_name": "GPT Test",
+                                "visibility": "list",
+                            }
+                        ]
+                    },
+                )
+            observed["url"] = str(request.url)
+            observed["authorization"] = request.headers.get("authorization")
+            observed["account"] = request.headers.get("chatgpt-account-id")
+            observed["gateway"] = request.headers.get(GATEWAY_TOKEN_HEADER.lower())
+            observed["cookie"] = request.headers.get("cookie")
+            observed["body"] = json.loads(request.content)
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "text/event-stream"},
+                content=b'event: response.completed\ndata: {"type":"response.completed"}\n\n',
+            )
+
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        app = GatewayApp(self.settings, http_client=client)
+        response: StreamingResponse | None = None
+        try:
+            result = app.responses(
+                {
+                    "Authorization": "Bearer chatgpt-secret",
+                    "ChatGPT-Account-Id": "account-secret",
+                    GATEWAY_TOKEN_HEADER: "gateway-secret",
+                    "Cookie": "must-not-forward",
+                },
+                json.dumps(
+                    {
+                        "model": "gpt-test",
+                        "input": [
+                            {
+                                "type": "message",
+                                "role": "user",
+                                "content": [
+                                    {"type": "input_text", "text": "gpt-private"}
+                                ],
+                            }
+                        ],
+                        "stream": True,
+                    }
+                ).encode(),
+            )
+            self.assertIsInstance(result, StreamingResponse)
+            response = result
+            self.assertEqual(b"".join(response.response.iter_bytes())[:6], b"event:")
+        finally:
+            if response is not None:
+                response.response.close()
+            app.close()
+
+        self.assertEqual(
+            observed["url"],
+            "https://chatgpt.test/backend-api/codex/responses",
+        )
+        self.assertEqual(observed["authorization"], "Bearer chatgpt-secret")
+        self.assertEqual(observed["account"], "account-secret")
+        self.assertIsNone(observed["gateway"])
+        self.assertIsNone(observed["cookie"])
+        self.assertEqual(observed["body"]["model"], "gpt-test")
+
+        audit = self.settings.route_audit_path.read_text(encoding="utf-8")
+        self.assertNotIn("gpt-private", audit)
+        self.assertNotIn("chatgpt-secret", audit)
+        self.assertNotIn("account-secret", audit)
+
+    def test_gpt_request_omits_foreign_plaintext_reasoning(self) -> None:
+        observed: dict[str, object] = {}
+        openai_reasoning = {
+            "type": "reasoning",
+            "id": "rs_openai",
+            "summary": [],
+            "encrypted_content": "opaque-openai-reasoning",
+        }
+        assistant_message = {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "DeepSeek replied"}],
+        }
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "GET":
+                return httpx.Response(
+                    200,
+                    json={
+                        "models": [
+                            {
+                                "slug": "gpt-test",
+                                "display_name": "GPT Test",
+                                "visibility": "list",
+                            }
+                        ]
+                    },
+                )
+            observed["body"] = json.loads(request.content)
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "text/event-stream"},
+                content=(
+                    b"event: response.completed\n"
+                    b'data: {"type":"response.completed"}\n\n'
+                ),
+            )
+
+        app = GatewayApp(
+            self.settings,
+            http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        response: StreamingResponse | None = None
+        try:
+            result = app.responses(
+                {"Authorization": "Bearer chatgpt-secret"},
+                json.dumps(
+                    {
+                        "model": "gpt-test",
+                        "input": [
+                            openai_reasoning,
+                            {
+                                "type": "reasoning",
+                                "id": "foreign-plaintext-reasoning",
+                                "summary": [],
+                                "content": [
+                                    {
+                                        "type": "reasoning_text",
+                                        "text": "DeepSeek private reasoning",
+                                    }
+                                ],
+                                "encrypted_content": None,
+                            },
+                            {
+                                "type": "reasoning",
+                                "id": "foreign-route-scoped-reasoning",
+                                "summary": [],
+                                "content": [
+                                    {
+                                        "type": "reasoning_text",
+                                        "text": "DeepSeek private reasoning",
+                                    }
+                                ],
+                                "encrypted_content": (
+                                    "sudhir-codex-route-v1.853f10f9207f80235ec0b1d6."
+                                    "fbd0a62b-c79e-4ee6-8fd3-47371f11223f-0"
+                                ),
+                            },
+                            assistant_message,
+                        ],
+                        "stream": True,
+                    }
+                ).encode(),
+            )
+            self.assertIsInstance(result, StreamingResponse)
+            response = result
+            self.assertEqual(b"".join(response.response.iter_bytes())[:6], b"event:")
+        finally:
+            if response is not None:
+                response.response.close()
+            app.close()
+
+        self.assertEqual(
+            observed["body"]["input"],  # type: ignore[index]
+            [openai_reasoning, assistant_message],
+        )
+
+    def test_search_proxies_pi_model_through_chatgpt_auth(self) -> None:
+        observed: dict[str, object] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            observed["url"] = str(request.url)
+            observed["authorization"] = request.headers.get("authorization")
+            observed["account"] = request.headers.get("chatgpt-account-id")
+            observed["gateway"] = request.headers.get(GATEWAY_TOKEN_HEADER.lower())
+            observed["cookie"] = request.headers.get("cookie")
+            observed["body"] = json.loads(request.content)
+            return httpx.Response(
+                200,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Request-Id": "search-request-id",
+                },
+                json={"output": "Search result"},
+            )
+
+        app = GatewayApp(
+            self.settings,
+            http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        request_body = json.dumps(
+            {
+                "id": "search-session",
+                "model": "pi-deepseek/deepseek-v4-flash",
+                "commands": {"search_query": [{"q": "private-search-query"}]},
+            }
+        ).encode()
+        try:
+            response = app.search(
+                {
+                    "Authorization": "Bearer chatgpt-secret",
+                    "ChatGPT-Account-Id": "account-secret",
+                    GATEWAY_TOKEN_HEADER: "gateway-secret",
+                    "Cookie": "must-not-forward",
+                },
+                request_body,
+            )
+        finally:
+            app.close()
+
+        self.assertEqual(
+            observed["url"],
+            "https://chatgpt.test/backend-api/codex/alpha/search",
+        )
+        self.assertEqual(observed["authorization"], "Bearer chatgpt-secret")
+        self.assertEqual(observed["account"], "account-secret")
+        self.assertIsNone(observed["gateway"])
+        self.assertIsNone(observed["cookie"])
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.headers["x-request-id"], "search-request-id")
+
+        audit = self.settings.route_audit_path.read_text(encoding="utf-8")
+        self.assertIn('"provider_id":"openai-codex-search"', audit)
+        self.assertNotIn("private-search-query", audit)
+
+    def test_image_generation_proxies_through_chatgpt_auth(self) -> None:
+        observed: dict[str, object] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            observed["url"] = str(request.url)
+            observed["authorization"] = request.headers.get("authorization")
+            observed["gateway"] = request.headers.get(GATEWAY_TOKEN_HEADER.lower())
+            observed["body"] = json.loads(request.content)
+            return httpx.Response(
+                200,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Request-Id": "image-request-id",
+                },
+                json={"data": [{"b64_json": "image-data"}]},
+            )
+
+        app = GatewayApp(
+            self.settings,
+            http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        request_body = json.dumps(
+            {"model": "gpt-image-2", "prompt": "private-image-prompt"}
+        ).encode()
+        try:
+            response = app.generate_image(
+                {
+                    "Authorization": "Bearer chatgpt-secret",
+                    GATEWAY_TOKEN_HEADER: "gateway-secret",
+                },
+                request_body,
+            )
+        finally:
+            app.close()
+
+        self.assertEqual(
+            observed["url"],
+            "https://chatgpt.test/backend-api/codex/images/generations",
+        )
+        self.assertEqual(observed["authorization"], "Bearer chatgpt-secret")
+        self.assertIsNone(observed["gateway"])
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.headers["x-request-id"], "image-request-id")
+
+        audit = self.settings.route_audit_path.read_text(encoding="utf-8")
+        self.assertIn('"provider_id":"openai-codex-image"', audit)
+        self.assertNotIn("private-image-prompt", audit)
+
+    def test_malformed_pi_catalog_cannot_block_gpt_requests(self) -> None:
+        write_json(
+            self.pi / "models.json",
+            {
+                "providers": {
+                    "broken": {
+                        "models": [{"id": "broken/model"}],
+                    }
+                }
+            },
+        )
+        post_calls = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal post_calls
+            if request.method == "GET":
+                return httpx.Response(
+                    200,
+                    json={
+                        "models": [
+                            {
+                                "slug": "gpt-test",
+                                "display_name": "GPT Test",
+                                "visibility": "list",
+                            }
+                        ]
+                    },
+                )
+            post_calls += 1
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "text/event-stream"},
+                content=(
+                    b"event: response.completed\n"
+                    b'data: {"type":"response.completed"}\n\n'
+                ),
+            )
+
+        app = GatewayApp(
+            self.settings,
+            http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        response: StreamingResponse | None = None
+        try:
+            result = app.responses(
+                {"Authorization": "Bearer chatgpt-secret"},
+                json.dumps(
+                    {
+                        "model": "gpt-test",
+                        "input": [],
+                        "stream": True,
+                    }
+                ).encode(),
+            )
+            self.assertIsInstance(result, StreamingResponse)
+            response = result
+            self.assertEqual(b"".join(response.response.iter_bytes())[:6], b"event:")
+        finally:
+            if response is not None:
+                response.response.close()
+            app.close()
+
+        self.assertEqual(post_calls, 1)
+
+    def test_pi_catalog_refreshes_additions_and_removals(self) -> None:
+        app = GatewayApp(
+            self.settings,
+            http_client=httpx.Client(
+                transport=httpx.MockTransport(lambda _request: httpx.Response(500))
+            ),
+        )
+        try:
+            initial = app.catalog()
+
+            document = basic_pi_document()
+            document["providers"]["demo"]["models"].append(
+                {
+                    "id": "demo/new-model",
+                    "name": "New Model",
+                }
+            )
+            write_json(self.pi / "models.json", document)
+            added = app.catalog()
+
+            document["providers"]["demo"]["models"] = [
+                {
+                    "id": "demo/new-model",
+                    "name": "New Model",
+                }
+            ]
+            write_json(self.pi / "models.json", document)
+            removed = app.catalog()
+        finally:
+            app.close()
+
+        self.assertEqual(
+            set(initial.by_gateway_id),
+            {"pi-demo/demo/model"},
+        )
+        self.assertEqual(
+            set(added.by_gateway_id),
+            {"pi-demo/demo/model", "pi-demo/demo/new-model"},
+        )
+        self.assertEqual(
+            set(removed.by_gateway_id),
+            {"pi-demo/demo/new-model"},
+        )
+
+    def test_pi_catalog_refresh_retries_replacement_during_load(self) -> None:
+        app = GatewayApp(
+            self.settings,
+            http_client=httpx.Client(
+                transport=httpx.MockTransport(lambda _request: httpx.Response(500))
+            ),
+        )
+        try:
+            app.catalog()
+            models_path = self.pi / "models.json"
+
+            document_b = basic_pi_document()
+            document_b["providers"]["demo"]["models"] = [
+                {"id": "demo/model-b", "name": "Model B"}
+            ]
+            replacement_b = self.pi / "models-b.json"
+            write_json(replacement_b, document_b)
+            replacement_b.replace(models_path)
+
+            document_c = basic_pi_document()
+            document_c["providers"]["demo"]["models"] = [
+                {"id": "demo/model-c", "name": "Model C"}
+            ]
+            original_load = app.loader.load
+            load_count = 0
+
+            def load_then_replace() -> object:
+                nonlocal load_count
+                load_count += 1
+                loaded = original_load()
+                if load_count == 1:
+                    replacement_c = self.pi / "models-c.json"
+                    write_json(replacement_c, document_c)
+                    replacement_c.replace(models_path)
+                return loaded
+
+            app.loader.load = load_then_replace
+            refreshed = app.catalog()
+            unchanged = app.catalog()
+        finally:
+            app.close()
+
+        self.assertEqual(load_count, 2)
+        self.assertEqual(
+            set(refreshed.by_gateway_id),
+            {"pi-demo/demo/model-c"},
+        )
+        self.assertEqual(
+            set(unchanged.by_gateway_id),
+            {"pi-demo/demo/model-c"},
+        )
+
+    def test_cached_gpt_model_is_allowed_when_live_catalog_fails(self) -> None:
+        write_json(
+            self.settings.gpt_cache_path,
+            {
+                "models": [
+                    {
+                        "slug": "gpt-cached",
+                        "display_name": "GPT Cached",
+                        "visibility": "list",
+                    }
+                ]
+            },
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "GET":
+                return httpx.Response(503)
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "text/event-stream"},
+                content=(
+                    b"event: response.completed\n"
+                    b'data: {"type":"response.completed"}\n\n'
+                ),
+            )
+
+        app = GatewayApp(
+            self.settings,
+            http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        response: StreamingResponse | None = None
+        try:
+            result = app.responses(
+                {"Authorization": "Bearer chatgpt-secret"},
+                json.dumps(
+                    {
+                        "model": "gpt-cached",
+                        "input": [],
+                        "stream": True,
+                    }
+                ).encode(),
+            )
+            self.assertIsInstance(result, StreamingResponse)
+            response = result
+        finally:
+            if response is not None:
+                response.response.close()
+            app.close()
+
+    def test_unknown_gpt_model_fails_before_responses_upstream(self) -> None:
+        post_calls = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal post_calls
+            if request.method == "GET":
+                return httpx.Response(
+                    200,
+                    json={
+                        "models": [
+                            {
+                                "slug": "gpt-known",
+                                "display_name": "GPT Known",
+                                "visibility": "list",
+                            }
+                        ]
+                    },
+                )
+            post_calls += 1
+            return httpx.Response(500)
+
+        app = GatewayApp(
+            self.settings,
+            http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        try:
+            with self.assertRaisesRegex(GatewayError, "Unknown GPT model ID"):
+                app.responses(
+                    {"Authorization": "Bearer chatgpt-secret"},
+                    json.dumps(
+                        {
+                            "model": "gpt-unknown",
+                            "input": [],
+                            "stream": True,
+                        }
+                    ).encode(),
+                )
+        finally:
+            app.close()
+
+        self.assertEqual(post_calls, 0)
+
+    def test_models_merge_live_gpt_and_pi_catalogs(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            self.assertEqual(request.url.path, "/backend-api/codex/models")
+            self.assertEqual(
+                request.url.params.get("client_version"),
+                CHATGPT_CLIENT_VERSION,
+            )
+            self.assertEqual(request.url.params.get("feature"), "kept")
+            self.assertEqual(
+                request.headers.get("authorization"),
+                "Bearer chatgpt-secret",
+            )
+            return httpx.Response(
+                200,
+                json={
+                    "models": [
+                        {
+                            "slug": "gpt-test",
+                            "display_name": "GPT Test",
+                            "visibility": "list",
+                            "priority": 1,
+                        }
+                    ]
+                },
+            )
+
+        app = GatewayApp(
+            self.settings,
+            http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        try:
+            response = app.list_models(
+                {
+                    "Authorization": "Bearer chatgpt-secret",
+                    GATEWAY_TOKEN_HEADER: "gateway-secret",
+                },
+                "client_version=0.0.0&feature=kept",
+            )
+        finally:
+            app.close()
+
+        document = json.loads(response.body)
+        by_id = {model["slug"]: model for model in document["models"]}
+        self.assertEqual(
+            set(by_id),
+            {
+                "gpt-test",
+                "pi-demo/demo/model",
+                "cursor/composer-2.5-fast",
+                "cursor/composer-2.5-slow",
+                "cursor/composer-latest-fast",
+                "cursor/composer-latest-slow",
+                "cursor/grok-4.5-fast",
+                "cursor/grok-4.5-slow",
+                "cursor/grok-4.6-fast",
+                "cursor/grok-4.6-slow",
+                "cursor/grok-4.7-fast",
+                "cursor/grok-4.7-slow",
+            },
+        )
+        self.assertEqual(by_id["gpt-test"]["multi_agent_version"], "v2")
+        self.assertEqual(
+            by_id["pi-demo/demo/model"]["multi_agent_version"],
+            "v2",
+        )
+        self.assertEqual(
+            by_id["cursor/composer-latest-fast"]["multi_agent_version"],
+            "v2",
+        )
+        self.assertEqual(response.headers["X-Sudhir-GPT-Catalog"], "live")
+        self.assertIn("ETag", response.headers)
+
+    def test_picker_first_page_preserves_visible_models_and_hidden_routes(self) -> None:
+        upstream = [
+            {"slug": "gpt-visible", "visibility": "list", "priority": 0},
+            *[
+                {
+                    "slug": f"gpt-hidden-{index}",
+                    "visibility": "list",
+                    "priority": index + 1,
+                    "context_window": 272_000,
+                }
+                for index in range(125)
+            ],
+        ]
+        write_json(
+            self.settings.model_visibility_path,
+            {
+                "default": "hide",
+                "show": [
+                    "gpt-visible",
+                    "pi-demo/demo/model",
+                    "cursor/grok-4.6-*",
+                    "cursor/grok-4.7-*",
+                ],
+            },
+        )
+        expected = [
+            "gpt-visible",
+            "pi-demo/demo/model",
+            "cursor/grok-4.6-fast",
+            "cursor/grok-4.6-slow",
+            "cursor/grok-4.7-fast",
+            "cursor/grok-4.7-slow",
+        ]
+        live = True
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return (
+                httpx.Response(200, json={"models": upstream})
+                if live
+                else httpx.Response(503)
+            )
+
+        app = GatewayApp(
+            self.settings,
+            http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        try:
+            for source in ("live", "cache"):
+                with self.subTest(source=source):
+                    live = source == "live"
+                    response = app.list_models(
+                        {"Authorization": "Bearer fixture-auth"}, ""
+                    )
+                    self.assertEqual(response.headers["X-Sudhir-GPT-Catalog"], source)
+                    models = json.loads(response.body)["models"]
+                    # The desktop asks for 100 entries including hidden models,
+                    # ignores nextCursor, then filters its page by visibility.
+                    first_page = sorted(models, key=lambda model: model["priority"])[:100]
+                    self.assertEqual(
+                        [model["slug"] for model in first_page if model["visibility"] == "list"],
+                        expected,
+                    )
+                    by_id = {model["slug"]: model for model in models}
+                    self.assertEqual(len(by_id), len(models))
+                    self.assertEqual(
+                        set(by_id),
+                        {model["slug"] for model in upstream}
+                        | {"pi-demo/demo/model"}
+                        | {route.gateway_id for route in CURSOR_MODEL_ROUTES},
+                    )
+                    for original in upstream:
+                        actual = by_id[original["slug"]]
+                        for key, value in original.items():
+                            if key not in {"visibility", "priority"}:
+                                self.assertEqual(actual[key], value)
+                    self.assertEqual(by_id["gpt-hidden-124"]["visibility"], "hide")
+                    self.assertEqual(
+                        [model["slug"] for model in models if model["slug"].startswith("gpt-hidden-")],
+                        [model["slug"] for model in upstream[1:]],
+                    )
+                    before_reapply = json.dumps(models, sort_keys=True)
+                    reapplied = apply_model_visibility(
+                        {"models": models}, self.settings.model_visibility_path
+                    )
+                    self.assertEqual(
+                        json.dumps(reapplied["models"], sort_keys=True), before_reapply
+                    )
+        finally:
+            app.close()
+
+    def test_concurrent_live_catalog_writes_leave_valid_cache(self) -> None:
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "models": [
+                        {
+                            "slug": "gpt-test",
+                            "display_name": "GPT Test",
+                            "visibility": "list",
+                        }
+                    ]
+                },
+            )
+
+        app = GatewayApp(
+            self.settings,
+            http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
+                responses = list(
+                    pool.map(
+                        lambda _index: app.list_models(
+                            {"Authorization": "Bearer chatgpt-secret"},
+                            "",
+                        ),
+                        range(64),
+                    )
+                )
+        finally:
+            app.close()
+
+        self.assertEqual([response.status for response in responses], [200] * 64)
+        cached = json.loads(self.settings.gpt_cache_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            [model["slug"] for model in cached["models"]],
+            ["gpt-test"],
+        )
+
+    def test_gateway_token_comparison_is_exact(self) -> None:
+        app = GatewayApp(
+            self.settings,
+            http_client=httpx.Client(
+                transport=httpx.MockTransport(lambda _request: httpx.Response(500))
+            ),
+        )
+        try:
+            self.assertTrue(app.authenticate("gateway-secret"))
+            self.assertFalse(app.authenticate("Gateway-secret"))
+            self.assertFalse(app.authenticate(None))
+        finally:
+            app.close()
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class CatalogVersionTests(unittest.TestCase):
+    def test_detect_override_clear_and_failure(self):
+        import subprocess
+        from sudhir_codex_gateway.catalog_version import resolve_catalog_version, set_catalog_version_override
+        from sudhir_codex_gateway.platform_support import core_binary_name
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            state = root / "state"
+            state.mkdir()
+            with patch("sudhir_codex_gateway.catalog_version.subprocess.run") as run:
+                run.return_value.stdout = "codex-cli 0.153.4\n"
+                result = resolve_catalog_version(root, state)
+                self.assertEqual(result, CatalogVersion("0.153.4", "0.153.4", None, None))
+                self.assertEqual(run.call_args.args[0], [str(root / "dist" / core_binary_name()), "--version"])
+                self.assertEqual(run.call_args.kwargs["env"]["CODEX_HOME"], str(state))
+                set_catalog_version_override(state, "0.153.2")
+                self.assertEqual(resolve_catalog_version(root, state), CatalogVersion("0.153.4", "0.153.2", "0.153.2", None))
+                run.side_effect = subprocess.TimeoutExpired("core", 5)
+                result = resolve_catalog_version(root, state)
+                self.assertIsNone(result.actual)
+                self.assertEqual(result.effective, "0.153.2")
+                self.assertTrue(result.detection_error)
+                set_catalog_version_override(state, None)
+                self.assertIsNone(resolve_catalog_version(root, state).effective)
+                run.side_effect = None
+                run.return_value.stdout = "codex-cli 0.148.0-alpha.7\n"
+                self.assertEqual(resolve_catalog_version(root, state).effective, "0.148.0-alpha.7")
+                run.return_value.stdout = "unexpected output"
+                self.assertIsNone(resolve_catalog_version(root, state).effective)
+                with self.assertRaises(GatewayError):
+                    set_catalog_version_override(state, "bad version")
+
+    def test_catalog_routes_use_startup_version_and_failure_keeps_pi(self):
+        from sudhir_codex_gateway.catalog_version import set_catalog_version_override
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = make_repo(root / "repo")
+            state = root / "state"
+            state.mkdir()
+            pi = root / "pi"
+            write_json(pi / "models.json", basic_pi_document())
+            settings = GatewaySettings(repo, state, pi, "test-token")
+            versions = []
+            def handler(request):
+                versions.append(request.url.params["client_version"])
+                return httpx.Response(200, json={"models": [{"slug": "gpt-6-astra", "display_name": "Astra"}]})
+            for override, expected in [(None, "0.153.4"), ("0.153.2", "0.153.2"), (None, "0.153.4")]:
+                set_catalog_version_override(state, override)
+                with patch("sudhir_codex_gateway.catalog_version.subprocess.run") as run:
+                    run.return_value.stdout = "codex-cli 0.153.4\n"
+                    app = GatewayApp(settings, http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+                    try:
+                        response = app.list_models({}, "client_version=0.0.0")
+                        self.assertEqual(response.headers["X-Sudhir-GPT-Catalog"], "live")
+                        self.assertIn("gpt-6-astra", {m["slug"] for m in json.loads(response.body)["models"]})
+                        self.assertEqual(versions[-1], expected)
+                        app.list_models({}, "")
+                        self.assertEqual(run.call_count, 1)
+                    finally:
+                        app.close()
+            with patch("sudhir_codex_gateway.catalog_version.subprocess.run", side_effect=FileNotFoundError):
+                app = GatewayApp(settings, http_client=httpx.Client(transport=httpx.MockTransport(lambda r: self.fail("must not guess version"))))
+                try:
+                    self.assertEqual(app.list_models({}, "").headers["X-Sudhir-GPT-Catalog"], "cache")
+                    settings.gpt_cache_path.unlink()
+                    response = app.list_models({}, "")
+                    self.assertEqual(response.headers["X-Sudhir-GPT-Catalog"], "unavailable")
+                    self.assertTrue(any(m["slug"].startswith("pi-") for m in json.loads(response.body)["models"]))
+                    self.assertEqual(app.health().status, 200)
+                finally:
+                    app.close()
+
+    def test_management_catalog_defers_version_to_gateway(self):
+        from sudhir_codex_gateway.management import list_models
+        from sudhir_codex_gateway.state import RuntimePaths
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            paths = RuntimePaths(root, root / "state", root / "pi")
+            paths.token_file.parent.mkdir(parents=True)
+            paths.token_file.write_text("test-token")
+            with patch("sudhir_codex_gateway.management.start_gateway"), patch("sudhir_codex_gateway.management._private_chatgpt_headers", return_value={}), patch("sudhir_codex_gateway.management.httpx.get") as get:
+                get.return_value = httpx.Response(200, json={"models": [{"slug": "gpt-6-astra"}]}, headers={"X-Sudhir-GPT-Catalog": "live"})
+                models, source = list_models(paths)
+                self.assertEqual((models[0]["id"], source), ("gpt-6-astra", "live"))
+                self.assertNotIn("params", get.call_args.kwargs)

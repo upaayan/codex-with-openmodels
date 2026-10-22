@@ -1,81 +1,134 @@
-<p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
-<p align="center">
-  <img src="https://github.com/openai/codex/blob/main/.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
-</p>
-</br>
-If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="https://developers.openai.com/codex/ide">install in your IDE.</a>
-</br>If you want the desktop app experience, run <code>codex app</code> or visit <a href="https://chatgpt.com/codex?app-landing-page=true">the Codex App page</a>.
-</br>If you are looking for the <em>cloud-based agent</em> from OpenAI, <strong>Codex Web</strong>, go to <a href="https://chatgpt.com/codex">chatgpt.com/codex</a>.</p>
+# Codex with Open Models
 
----
+Codex with Open Models is an independent, point-in-time fork of the
+Apache-2.0-licensed
+[OpenAI Codex CLI](https://github.com/openai/codex). It lets one Codex CLI use
+OpenAI GPT models alongside compatible open-weight and third-party models.
 
-## Quickstart
+This is a one-time fork, not a continuously synchronized mirror. Selected
+upstream Codex changes may be reviewed, tested, and brought across at intervals.
+Nothing is merged or released automatically.
 
-### Installing and running Codex CLI
+This project is not affiliated with, endorsed by, or supported by OpenAI.
+OpenAI and Codex are trademarks of their respective owner.
 
-Run the following on Mac or Linux to install Codex CLI:
+## 0.163.0 candidate upgrade
 
-```shell
-curl -fsSL https://chatgpt.com/codex/install.sh | sh
-```
+This branch targets upstream Codex **0.163.0** at
+`83086188ae0614bd882818ff1aa23f3194962012`. Native builds are dispatched in
+GitHub Actions one platform at a time, starting with Apple Silicon macOS.
+The candidate is not an accepted replacement until its recorded artifact checks pass.
 
-Run the following on Windows to install Codex CLI:
+GPT inference can use an authenticated Responses WebSocket through the gateway.
+Pi and Cursor keep their existing HTTP adapters. Set `SUDHIR_CODEX_WEBSOCKETS=0`
+when launching to restore HTTP-only operation. Production-mode external DevTools
+uses an ephemeral loopback debugging port; `SUDHIR_CODEX_DEVTOOLS=0` omits it.
+The built-in Developer menu remains unavailable in production mode. The official
+application, signatures, provider identity and cloud executor are preserved.
 
-```shell
-powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"
-```
+## Current stable release
 
-The standalone installers download from `https://releases.openai.com/codex` by default and fall back to GitHub Releases if a metadata or asset download is unavailable. To force GitHub Releases, set `CODEX_INSTALLER_USE_RELEASES_OPENAI_COM` to `false` (`0` and `no` are also accepted):
+The current stable and GitHub Latest release is
+[`openmodels-v0.1.0-rc.12`](https://github.com/upaayan/codex-with-openmodels/releases/tag/openmodels-v0.1.0-rc.12). It was built from
+`ea745c5af4afa070c0462cb7465f70429b77b573` and accepted on Apple Silicon macOS and on the supported
+Windows/WSL2 deployment using the Linux x64 MUSL backend.
 
-```shell
-curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_INSTALLER_USE_RELEASES_OPENAI_COM=false sh
-```
+The tag retains its historical `rc.12` suffix for immutable build provenance,
+but the GitHub Release is published as a stable, non-prerelease release. Download
+the matching platform archive together with `SHA256SUMS` and verify it before
+installation.
 
-```powershell
-$env:CODEX_INSTALLER_USE_RELEASES_OPENAI_COM='false'; irm https://chatgpt.com/codex/install.ps1 | iex
-```
+## Models and access
 
-Codex CLI can also be installed via the following package managers:
+- **GPT models** use the normal Codex sign-in and the user's existing
+  ChatGPT/Codex subscription.
+- **Open-weight and other non-GPT models** use the user's own provider API
+  keys. Model definitions and keys remain on the user's machine and are read
+  from the local Pi model registry.
+- **Cursor models** are optional and use the user's own Cursor
+  credential through the pinned Cursor SDK worker.
 
-```shell
-# Install using npm
-npm install -g @openai/codex
-```
+The merged model picker allows a task to switch between these routes without
+replacing the official Codex installation.
 
-```shell
-# Install using Homebrew
-brew install --cask codex
-```
+Open-weight model families with explicit route handling include:
 
-Then simply run `codex` to get started.
+- DeepSeek
+- Moonshot Kimi
+- Z.AI GLM
+- MiniMax
+- Qwen
+- Google Gemma and DiffusionGemma
+- OpenAI gpt-oss
+- Xiaomi MiMo
+- HY
 
-<details>
-<summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
+Exact models depend on the user's local registry and the APIs available from
+their chosen providers. Compatible additional models can use the generic
+OpenAI Chat Completions, OpenAI Responses, or Anthropic Messages adapters.
+Native Gemini Developer API and Google Vertex routes use Pi's pinned
+`@google/genai` transport instead of those compatibility adapters. The Pi API
+label `google-generative-ai` is an internal discriminator; this project does
+not use the deprecated Python `google-generativeai` package.
+Model licences and provider terms vary.
 
-Each GitHub Release contains many executables, but in practice, you likely want one of these:
+## What is included
 
-- macOS
-  - Apple Silicon/arm64: `codex-aarch64-apple-darwin.tar.gz`
-  - x86_64 (older Mac hardware): `codex-x86_64-apple-darwin.tar.gz`
-- Linux
-  - x86_64: `codex-x86_64-unknown-linux-musl.tar.gz`
-  - arm64: `codex-aarch64-unknown-linux-musl.tar.gz`
+- The forked Rust CLI and app server.
+- A Python gateway that combines GPT and configured non-GPT routes.
+- A guarded `sudhir-codex` launcher with state separate from official Codex.
+- A pinned Node worker for eight optional Cursor routes.
+- GitHub Actions definitions for native Apple Silicon macOS and Linux x64 MUSL
+  backend release bundles.
 
-Each archive contains a single entry with the platform baked into the name (e.g., `codex-x86_64-unknown-linux-musl`), so you likely want to rename it to `codex` after extracting it.
+No ChatGPT or Codex desktop-app package, artwork, extracted asset, credential,
+API key, authentication file, or local configuration is included.
 
-</details>
+## Supported release targets
 
-### Using Codex with your ChatGPT plan
+The native release workflow builds:
 
-Run `codex` and select **Sign in with ChatGPT**. We recommend signing into your ChatGPT account to use Codex as part of your Plus, Pro, Business, Edu, or Enterprise plan. [Learn more about what's included in your ChatGPT plan](https://help.openai.com/en/articles/11369540-codex-in-chatgpt).
+- Apple Silicon macOS: `aarch64-apple-darwin`
+- Ubuntu 22.04 x64: `x86_64-unknown-linux-musl`
 
-You can also use Codex with an API key, but this requires [additional setup](https://developers.openai.com/codex/auth#sign-in-with-an-api-key).
+The release provides two native runtime archives and one `SHA256SUMS` file.
+Windows runs the Linux x64 MUSL backend inside WSL2; WSL1 and a native Windows
+backend are not supported release targets. The native Windows Tauri frontend
+continues to launch the WSL2 backend through `wsl.exe`.
 
-## Docs
+## Runtime isolation
 
-- [**Codex Documentation**](https://developers.openai.com/codex)
-- [**Contributing**](./docs/contributing.md)
-- [**Installing & building**](./docs/install.md)
-- [**Open source fund**](./docs/open-source-fund.md)
+The launcher uses a separate state directory and refuses overlapping or
+symlinked official Codex state. The gateway listens only on
+`127.0.0.1:32179`, requires a private client token on every request, and keeps
+provider credentials out of model-invoked shell environments.
 
-This repository is licensed under the [Apache-2.0 License](LICENSE).
+The repository contains no provider credentials. Model definitions, API keys,
+and authentication data remain private inputs on each user-controlled machine.
+
+## Setup and use
+
+See [sudhir_codex/README.md](sudhir_codex/README.md) for the Unix source and
+prebuilt installer modes, WSL2 deployment, model IDs, gateway commands, and
+rollback notes.
+
+For copy-friendly Windows/WSL2 commands, see
+[WINDOWS-QUICKSTART.md](WINDOWS-QUICKSTART.md).
+
+The launch command is deliberately named `sudhir-codex`. Installation never
+creates or replaces a command named `codex`.
+
+## Upstream and modifications
+
+The recorded upstream base is in
+[.github/upstream-base.txt](.github/upstream-base.txt). A monthly workflow
+reports when OpenAI's `main` branch advances; it does not merge or release
+anything automatically.
+
+See [MODIFICATIONS.md](MODIFICATIONS.md) for the fork's modification summary.
+
+## Licence
+
+The upstream work and this fork are distributed under the
+[Apache License 2.0](LICENSE). Existing attribution is retained in
+[NOTICE](NOTICE).

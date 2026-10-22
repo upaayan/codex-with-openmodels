@@ -1222,6 +1222,9 @@ pub(crate) enum AppEvent {
     /// Update the current reasoning effort in the running app and widget.
     UpdateReasoningEffort(Option<ReasoningEffort>),
 
+    /// Change reasoning on the active task without changing new-task defaults.
+    UpdateActiveReasoningEffort(Option<ReasoningEffort>),
+
     /// Change Reserve effort only on the task that opened the picker, without saving defaults.
     UpdateLunaReserveReasoning {
         thread_id: ThreadId,
@@ -1472,6 +1475,9 @@ pub(crate) enum AppEvent {
 
     /// Update the Plan-mode-specific reasoning effort in memory.
     UpdatePlanModeReasoningEffort(Option<ReasoningEffort>),
+
+    /// Change active Plan-mode reasoning without changing new-task defaults.
+    UpdateActivePlanModeReasoningEffort(Option<ReasoningEffort>),
 
     /// Persist the acknowledgement flag for the rate limit switch prompt.
     PersistRateLimitSwitchPromptHidden,

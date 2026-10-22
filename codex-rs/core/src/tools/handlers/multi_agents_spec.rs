@@ -1,5 +1,6 @@
 use crate::agent::child_config::MAX_SPAWN_AGENT_MODEL_OVERRIDES;
 use crate::agent::child_config::model_supports_multi_agent_backend;
+use crate::agent::child_config::truncate_spawn_agent_model_text;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_tools::JsonSchema;
@@ -213,8 +214,7 @@ pub fn create_send_message_tool() -> ToolSpec {
             "message".to_string(),
             JsonSchema::string(Some(
                 "Message text to queue on the target agent.".to_string(),
-            ))
-            .with_encrypted(),
+            )),
         ),
     ]);
 
@@ -246,8 +246,7 @@ pub fn create_followup_task_tool() -> ToolSpec {
             "message".to_string(),
             JsonSchema::string(Some(
                 "Message text to send to the target agent.".to_string(),
-            ))
-            .with_encrypted(),
+            )),
         ),
     ]);
 
@@ -652,8 +651,7 @@ fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<St
             "message".to_string(),
             JsonSchema::string(Some(
                 "Initial plain-text task for the new agent.".to_string(),
-            ))
-            .with_encrypted(),
+            )),
         ),
         (
             "agent_type".to_string(),
@@ -881,9 +879,9 @@ fn spawn_agent_models_description(
         })
         .collect::<Vec<_>>()
         .join("\n");
-    format!(
-        "Available model overrides (optional; inherited parent model is preferred):\n{model_descriptions}"
-    )
+    truncate_spawn_agent_model_text(format!(
+        "Example model overrides (not exhaustive; any exact picker or `sudhir-codex models` ID is accepted):\n{model_descriptions}"
+    ))
 }
 
 fn wait_agent_tool_parameters_v1(options: WaitAgentTimeoutOptions) -> JsonSchema {

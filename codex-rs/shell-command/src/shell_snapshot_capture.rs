@@ -344,7 +344,7 @@ impl<'a> CapturedSnapshot<'a> {
                             continue;
                         };
                         if key.is_empty()
-                            || matches!(key, "PWD" | "OLDPWD")
+                            || matches!(key, "PWD" | "OLDPWD" | "SUDHIR_CODEX_GATEWAY_TOKEN")
                             || !key.bytes().enumerate().all(|(index, byte)| {
                                 byte == b'_'
                                     || byte.is_ascii_alphabetic()

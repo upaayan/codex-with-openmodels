@@ -54,7 +54,13 @@ pub(crate) async fn emit_sub_agent_activity(
 fn agent_message_from_tool(
     message: String,
     source: &crate::tools::context::ToolCallSource,
+    turn: &crate::session::turn_context::TurnContext,
 ) -> AgentMessage {
+    if turn.model_info().slug.starts_with("pi-")
+        || turn.config.multi_agent_v2.tool_namespace.as_deref() == Some("sudhir_agents")
+    {
+        return AgentMessage::Plaintext(message);
+    }
     if matches!(
         source,
         crate::tools::context::ToolCallSource::DirectPlaintextMessage

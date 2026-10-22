@@ -82,7 +82,6 @@ use codex_file_system::find_nearest_ancestor_with_markers;
 use codex_login::CodexAuth;
 use codex_model_provider::RemoteCompactionSupport;
 use codex_protocol::ResponseItemId;
-use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::error::CodexErr;
@@ -1375,8 +1374,6 @@ async fn run_pre_sampling_compact(
     client_session: &mut ModelClientSession,
     cancellation_token: &CancellationToken,
 ) -> CodexResult<()> {
-    maybe_run_previous_model_inline_compact(sess, turn_context, client_session, cancellation_token)
-        .await?;
     let token_status =
         super::context_window::context_window_token_status(sess.as_ref(), turn_context.as_ref())
             .await;
@@ -1398,102 +1395,6 @@ async fn run_pre_sampling_compact(
         )
         .await?;
     }
-    Ok(())
-}
-
-/// Returns true only when both turns declare compaction compatibility hashes and they differ.
-/// A missing hash does not provide enough information to trigger compaction.
-fn comp_hash_changed(previous: Option<&str>, current: Option<&str>) -> bool {
-    previous
-        .zip(current)
-        .is_some_and(|(previous, current)| previous != current)
-}
-
-/// Runs pre-sampling compaction against the previous model when its compaction compatibility
-/// hash changed or when switching to a smaller context-window model.
-///
-/// Returns `Err(_)` only when compaction was attempted and failed.
-async fn maybe_run_previous_model_inline_compact(
-    sess: &Arc<Session>,
-    turn_context: &Arc<TurnContext>,
-    client_session: &mut ModelClientSession,
-    cancellation_token: &CancellationToken,
-) -> CodexResult<()> {
-    let Some(previous_turn_settings) = sess.previous_turn_settings().await else {
-        return Ok(());
-    };
-    let should_compact_for_comp_hash_change = comp_hash_changed(
-        previous_turn_settings.comp_hash.as_deref(),
-        turn_context.model_info().comp_hash.as_deref(),
-    );
-    let previous_model = previous_turn_settings.model;
-    if !should_compact_for_comp_hash_change && previous_model == turn_context.model_info().slug {
-        return Ok(());
-    }
-    let mut previous_model_turn_context = turn_context
-        .with_model(previous_model.clone(), &sess.services.models_manager)
-        .await;
-    // `with_model` preserves the current turn's access program. Restore the previous
-    // turn's program so compaction uses the same model/cyber_access_program pair as that turn.
-    // Combining the previous model with the current turn's program can produce a pair
-    // that the server rejects.
-    previous_model_turn_context.cyber_access_program = cyber_access_program::for_provider(
-        &previous_model_turn_context.config.model_provider_id,
-        previous_turn_settings.cyber_access_program,
-    );
-    let previous_model_turn_context = Arc::new(previous_model_turn_context);
-
-    let reason = if should_compact_for_comp_hash_change {
-        CompactionReason::CompHashChanged
-    } else {
-        let Some(old_context_window) = previous_model_turn_context.model_context_window() else {
-            return Ok(());
-        };
-        let Some(new_context_window) = turn_context.model_context_window() else {
-            return Ok(());
-        };
-        let active_context_tokens = sess.get_total_token_usage().await;
-        let previous_model_limit_reached =
-            match turn_context.config.model_auto_compact_token_limit_scope {
-                AutoCompactTokenLimitScope::Total => {
-                    let new_auto_compact_limit = turn_context
-                        .model_info()
-                        .auto_compact_token_limit()
-                        .unwrap_or(i64::MAX);
-                    active_context_tokens > new_auto_compact_limit
-                        || active_context_tokens >= new_context_window
-                }
-                AutoCompactTokenLimitScope::BodyAfterPrefix => {
-                    active_context_tokens >= new_context_window
-                }
-            };
-        if !previous_model_limit_reached
-            || previous_model_turn_context.model_info().slug == turn_context.model_info().slug
-            || old_context_window <= new_context_window
-        {
-            return Ok(());
-        }
-        CompactionReason::ModelDownshift
-    };
-
-    let step_context = sess
-        .capture_step_context(previous_model_turn_context, cancellation_token)
-        .await?;
-    // The previous model summarizes the old window; the current model owns its replacement.
-    // Reuse the replacement step if the compaction request needs to fall back to that model.
-    let replacement_step_context = sess
-        .capture_speculative_step_context(Arc::clone(turn_context), cancellation_token)
-        .await?;
-    run_auto_compact(
-        sess,
-        step_context,
-        replacement_step_context,
-        client_session,
-        reason,
-        CompactionPhase::PreTurn,
-        /*candidate*/ None,
-    )
-    .await?;
     Ok(())
 }
 

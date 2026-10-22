@@ -9,6 +9,7 @@ use crate::exec_env::CODEX_SESSION_ID_ENV_VAR;
 use crate::exec_env::CODEX_THREAD_ID_ENV_VAR;
 use crate::exec_env::CODEX_TOOL_CALL_ID_ENV_VAR;
 use crate::exec_env::CODEX_VERSION_ENV_VAR;
+use crate::exec_env::SUDHIR_CODEX_GATEWAY_TOKEN_ENV_VAR;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::shell::ShellType;
@@ -350,12 +351,17 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
             override_env.insert(key.to_string(), value.clone());
         }
     }
+    // The gateway token authenticates the parent Codex process only. Ignore any
+    // configured override and restore its filtered live state after sourcing a
+    // snapshot so neither new nor stale snapshots can expose it to tools.
+    override_env.remove(SUDHIR_CODEX_GATEWAY_TOKEN_ENV_VAR);
     // Do not let a snapshot resurrect stale runtime state when it is inactive.
     let (override_captures, override_exports) = build_override_exports(
         &override_env,
         &[
             CODEX_PERMISSION_PROFILE_ENV_VAR,
             CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR,
+            SUDHIR_CODEX_GATEWAY_TOKEN_ENV_VAR,
             PLUGIN_METRICS_OUTPUT_ENV_VAR,
             CODEX_TOOL_CALL_ID_ENV_VAR,
         ],

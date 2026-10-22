@@ -108,21 +108,11 @@ fn ev_exec_command_call(call_id: &str, command: &str) -> serde_json::Value {
     )
 }
 
-pub(super) fn allow_echo_commands(home: &Path) {
-    let rules_dir = home.join("rules");
-    fs::create_dir_all(&rules_dir).expect("create exec policy rules directory");
-    fs::write(
-        rules_dir.join("default.rules"),
-        r#"prefix_rule(pattern=["echo"], decision="allow")"#,
-    )
-    .expect("write echo exec policy rule");
-}
-
-fn disabled_permission_user_turn(
+pub(super) fn disabled_permission_user_turn(
     text: impl Into<String>,
     cwd: PathBuf,
     model: String,
-) -> TurnInputRequest {
+) -> Op {
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, cwd.as_path());
     TurnInputRequest::user_input(vec![UserInput::Text {
@@ -154,7 +144,7 @@ fn summary_with_prefix(summary: &str) -> String {
     format!("{SUMMARY_PREFIX}\n{summary}")
 }
 
-fn set_test_compact_prompt(config: &mut Config) {
+pub(super) fn set_test_compact_prompt(config: &mut Config) {
     config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
 }
 
@@ -282,38 +272,13 @@ with Path(r"{manual_post_log_path}").open("a", encoding="utf-8") as handle:
     fs::write(home.join("hooks.json"), hooks.to_string()).expect("write hooks.json");
 }
 
-fn non_openai_model_provider(server: &MockServer) -> ModelProviderInfo {
+pub(super) fn non_openai_model_provider(server: &MockServer) -> ModelProviderInfo {
     let mut provider =
         built_in_model_providers(/* openai_base_url */ /*openai_base_url*/ None)["openai"].clone();
     provider.name = "OpenAI (test)".into();
     provider.base_url = Some(format!("{}/v1", server.uri()));
     provider.supports_websockets = false;
     provider
-}
-
-fn openai_model_provider(server: &MockServer) -> ModelProviderInfo {
-    let mut provider =
-        built_in_model_providers(/* openai_base_url */ /*openai_base_url*/ None)["openai"].clone();
-    provider.base_url = Some(format!("{}/v1", server.uri()));
-    provider.supports_websockets = false;
-    provider
-}
-
-fn invalid_request_response(message: impl Into<String>) -> wiremock::ResponseTemplate {
-    wiremock::ResponseTemplate::new(/*status*/ 400).set_body_json(json!({
-        "detail": message.into(),
-    }))
-}
-
-fn model_not_found_response(model: &str) -> wiremock::ResponseTemplate {
-    wiremock::ResponseTemplate::new(/*status*/ 404).set_body_json(json!({
-        "error": {
-            "message": format!("Model not found {model}"),
-            "type": "invalid_request_error",
-            "param": "model",
-            "code": null,
-        }
-    }))
 }
 
 fn write_global_file(
@@ -401,7 +366,7 @@ fn local_compaction_provider(server: &wiremock::MockServer) -> ModelProviderInfo
     provider
 }
 
-fn model_info_with_context_window(slug: &str, context_window: i64) -> ModelInfo {
+pub(super) fn model_info_with_context_window(slug: &str, context_window: i64) -> ModelInfo {
     let models_response = bundled_models_response().expect("bundled models.json should parse");
     let mut model_info = models_response
         .models
@@ -415,13 +380,13 @@ fn model_info_with_context_window(slug: &str, context_window: i64) -> ModelInfo 
     model_info
 }
 
-fn model_info_with_optional_comp_hash(slug: &str, comp_hash: Option<&str>) -> ModelInfo {
+pub(super) fn model_info_with_optional_comp_hash(slug: &str, comp_hash: Option<&str>) -> ModelInfo {
     let mut model_info = model_info_with_context_window(slug, /*context_window*/ 273_000);
     model_info.comp_hash = comp_hash.map(str::to_string);
     model_info
 }
 
-fn assert_pre_sampling_switch_compaction_requests(
+pub(super) fn assert_pre_sampling_switch_compaction_requests(
     first: &serde_json::Value,
     compact: &serde_json::Value,
     follow_up: &serde_json::Value,
@@ -429,7 +394,7 @@ fn assert_pre_sampling_switch_compaction_requests(
     next_model: &str,
 ) {
     assert_eq!(first["model"].as_str(), Some(previous_model));
-    assert_eq!(compact["model"].as_str(), Some(previous_model));
+    assert_eq!(compact["model"].as_str(), Some(next_model));
     assert_eq!(follow_up["model"].as_str(), Some(next_model));
 
     let compact_body = compact.to_string();
@@ -448,7 +413,9 @@ fn assert_pre_sampling_switch_compaction_requests(
     );
 }
 
-async fn assert_compaction_uses_turn_lifecycle_id(codex: &std::sync::Arc<codex_core::CodexThread>) {
+pub(super) async fn assert_compaction_uses_turn_lifecycle_id(
+    codex: &std::sync::Arc<codex_core::CodexThread>,
+) {
     let mut turn_started_id = None;
     let mut turn_completed_id = None;
     let mut compact_started_id = None;
@@ -2395,7 +2362,7 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
+async fn pre_sampling_compact_uses_selected_model_on_switch_to_smaller_context_model() {
     skip_if_no_network!();
 
     let server = MockServer::start().await;
@@ -2484,10 +2451,13 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
     insta::assert_snapshot!(
         "pre_sampling_model_switch_compaction_shapes",
         format_labeled_requests_snapshot(
-            "Pre-sampling compaction on model switch to a smaller context window: current behavior compacts using prior-turn history only (incoming user message excluded), and the follow-up request carries compacted history plus the new user message.",
+            "Pre-sampling compaction on model switch to a smaller context window: the selected model compacts prior-turn history only (incoming user message excluded), and the selected-model follow-up carries compacted history plus the new user message.",
             &[
                 ("Initial Request (Previous Model)", &requests[0]),
-                ("Pre-sampling Compaction Request", &requests[1]),
+                (
+                    "Pre-sampling Compaction Request (Selected Model)",
+                    &requests[1]
+                ),
                 (
                     "Post-Compaction Follow-up Request (Next Model)",
                     &requests[2]
@@ -2498,7 +2468,7 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn pre_sampling_compact_runs_when_comp_hash_changes() {
+async fn model_switch_with_changed_comp_hash_does_not_compact_without_pressure() {
     skip_if_no_network!();
 
     let server = MockServer::start().await;
@@ -2524,12 +2494,8 @@ async fn pre_sampling_compact_runs_when_comp_hash_changes() {
                 ev_completed_with_tokens("r1", /*total_tokens*/ 100),
             ]),
             sse(vec![
-                ev_assistant_message("m2", "COMP_HASH_SUMMARY"),
-                ev_completed_with_tokens("r2", /*total_tokens*/ 10),
-            ]),
-            sse(vec![
-                ev_assistant_message("m3", "after switch"),
-                ev_completed_with_tokens("r3", /*total_tokens*/ 100),
+                ev_assistant_message("m2", "after switch"),
+                ev_completed_with_tokens("r2", /*total_tokens*/ 100),
             ]),
         ],
     )
@@ -2566,230 +2532,10 @@ async fn pre_sampling_compact_runs_when_comp_hash_changes() {
         ))
         .await
         .expect("submit second user turn");
-    assert_compaction_uses_turn_lifecycle_id(&test.codex).await;
-
-    let requests = request_log.requests();
-    assert_eq!(models_mock.requests().len(), 1);
-    assert_eq!(
-        requests.len(),
-        3,
-        "a comp-hash change should compact before sampling the next turn"
-    );
-    assert_pre_sampling_switch_compaction_requests(
-        &requests[0].body_json(),
-        &requests[1].body_json(),
-        &requests[2].body_json(),
-        previous_model,
-        next_model,
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn previous_model_compaction_resolves_selected_settings() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-    let server = start_mock_server().await;
-    let request_log = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_assistant_message("m1", "before switch"),
-                ev_completed("r1"),
-            ]),
-            sse(vec![
-                ev_assistant_message("m2", "COMPACTION_SUMMARY"),
-                ev_completed("r2"),
-            ]),
-            responses::sse_completed("r3"),
-        ],
-    )
-    .await;
-    let model_provider = non_openai_model_provider(&server);
-    let test = test_codex()
-        .with_model_info_override("gpt-5.4", |model| {
-            model.comp_hash = Some("hash-a".to_string());
-            model.default_reasoning_summary = ReasoningSummary::Detailed;
-            model.service_tiers = vec![ModelServiceTier {
-                id: ServiceTier::Fast.request_value().to_string(),
-                name: "Fast".to_string(),
-                description: "Priority processing".to_string(),
-            }];
-        })
-        .with_model_info_override("gpt-5.2", |model| {
-            model.comp_hash = Some("hash-b".to_string());
-            model.default_reasoning_summary = ReasoningSummary::Auto;
-            model.service_tiers.clear();
-        })
-        .with_model("gpt-5.4")
-        .with_config(move |config| {
-            config.model_provider = model_provider;
-            config.model_reasoning_summary = None;
-            config.service_tier = Some(ServiceTier::Fast.request_value().to_string());
-            config
-                .features
-                .enable(Feature::FastMode)
-                .expect("enable FastMode");
-            set_test_compact_prompt(config);
-        })
-        .build_with_auto_env(&server)
-        .await?;
-    test.submit_text_turn("before switch").await?;
-    test.codex
-        .start_or_steer_turn(
-            TurnInputRequest::user_input(vec![UserInput::Text {
-                text: "after switch".to_string(),
-                text_elements: Vec::new(),
-            }])
-            .with_thread_settings(ThreadSettingsOverrides {
-                model: Some("gpt-5.2".to_string()),
-                ..Default::default()
-            }),
-        )
-        .await?;
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
-
-    // The retained priority selection is filtered out for B, restored for
-    // compaction on A, and still omitted from the following B request.
-    let actual = request_log
-        .requests()
-        .iter()
-        .map(|request| {
-            let body = request.body_json();
-            json!([
-                body["model"],
-                body["reasoning"]["summary"],
-                body["service_tier"]
-            ])
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        actual,
-        vec![
-            json!(["gpt-5.4", "detailed", "priority"]),
-            json!(["gpt-5.4", "detailed", "priority"]),
-            json!(["gpt-5.2", "auto", null]),
-        ]
-    );
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn pre_sampling_compact_falls_back_from_retired_previous_model_after_rename() {
-    skip_if_no_network!();
-
-    let server = MockServer::start().await;
-    let retired_model = "gpt-5.5";
-    let previous_model_family = "gpt-5.5";
-    let renamed_model = "gpt-5.6";
-    let mut previous_model_info = model_info_with_optional_comp_hash("gpt-5.4", Some("hash-a"));
-    previous_model_info.slug = previous_model_family.to_string();
-    let mut renamed_model_info = model_info_with_optional_comp_hash("gpt-5.4", Some("hash-b"));
-    renamed_model_info.slug = renamed_model.to_string();
-
-    let models_mock = mount_models_once(
-        &server,
-        ModelsResponse {
-            models: vec![previous_model_info, renamed_model_info],
-        },
-    )
-    .await;
-
-    let request_log = mount_response_sequence(
-        &server,
-        vec![
-            sse_response(sse(vec![
-                ev_assistant_message("m1", "before switch"),
-                ev_completed_with_tokens("r1", /*total_tokens*/ 100),
-            ])),
-            invalid_request_response(format!(
-                "The '{retired_model}' model is not supported when using Codex with a ChatGPT account."
-            )),
-            sse_response(sse(vec![
-                json!({
-                    "type": "response.output_item.done",
-                    "item": {
-                        "type": "compaction",
-                        "encrypted_content": "RETIRED_MODEL_SUMMARY",
-                    }
-                }),
-                ev_completed_with_tokens("r2", /*total_tokens*/ 10),
-            ])),
-            sse_response(sse(vec![
-                ev_assistant_message("m3", "after switch"),
-                ev_completed_with_tokens("r3", /*total_tokens*/ 100),
-            ])),
-        ],
-    )
-    .await;
-
-    let model_provider = openai_model_provider(&server);
-    let mut initial_builder = test_codex()
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_model(retired_model)
-        .with_config(move |config| {
-            config.model_provider = model_provider;
-            set_test_compact_prompt(config);
-        });
-    let initial = initial_builder
-        .build(&server)
-        .await
-        .expect("build initial test codex");
-    let home = initial.home.clone();
-    let rollout_path = initial
-        .session_configured
-        .rollout_path
-        .clone()
-        .expect("rollout path");
-
-    initial
-        .codex
-        .start_or_steer_turn(disabled_permission_user_turn(
-            "before switch",
-            initial.cwd.path().to_path_buf(),
-            retired_model.to_string(),
-        ))
-        .await
-        .expect("submit first user turn");
-    wait_for_event(&initial.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
-
-    initial
-        .codex
-        .submit(Op::Shutdown)
-        .await
-        .expect("shutdown initial session");
-    wait_for_event(&initial.codex, |event| {
-        matches!(event, EventMsg::ShutdownComplete)
-    })
-    .await;
-
-    let model_provider = openai_model_provider(&server);
-    let mut resumed_builder = test_codex()
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_model(retired_model)
-        .with_config(move |config| {
-            config.model_provider = model_provider;
-            set_test_compact_prompt(config);
-        });
-    let resumed = resumed_builder
-        .resume(&server, home, rollout_path)
-        .await
-        .expect("resume codex");
-
-    resumed
-        .codex
-        .start_or_steer_turn(disabled_permission_user_turn(
-            "after switch",
-            resumed.cwd.path().to_path_buf(),
-            renamed_model.to_string(),
-        ))
-        .await
-        .expect("submit renamed-model turn");
-    assert_compaction_uses_turn_lifecycle_id(&resumed.codex).await;
 
     let requests = request_log.requests();
     assert_eq!(models_mock.requests().len(), 1);
@@ -3374,7 +3120,7 @@ async fn manual_remote_compact_advice_respects_retry_limit(max_retries: u64) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn pre_sampling_compact_keeps_unknown_previous_model_for_api_key_auth_and_custom_provider() {
+async fn model_switch_to_selected_model_never_requests_previous_custom_model() {
     skip_if_no_network!();
 
     let server = MockServer::start().await;
@@ -3398,12 +3144,8 @@ async fn pre_sampling_compact_keeps_unknown_previous_model_for_api_key_auth_and_
                 ev_completed_with_tokens("r1", /*total_tokens*/ 100),
             ]),
             sse(vec![
-                ev_assistant_message("m2", "CUSTOM_MODEL_SUMMARY"),
-                ev_completed_with_tokens("r2", /*total_tokens*/ 10),
-            ]),
-            sse(vec![
-                ev_assistant_message("m3", "after switch"),
-                ev_completed_with_tokens("r3", /*total_tokens*/ 100),
+                ev_assistant_message("m2", "after switch"),
+                ev_completed_with_tokens("r2", /*total_tokens*/ 100),
             ]),
         ],
     )
@@ -3447,14 +3189,16 @@ async fn pre_sampling_compact_keeps_unknown_previous_model_for_api_key_auth_and_
     .await;
 
     let requests = request_log.requests();
-    assert_eq!(requests.len(), 3);
-    assert_pre_sampling_switch_compaction_requests(
-        &requests[0].body_json(),
-        &requests[1].body_json(),
-        &requests[2].body_json(),
-        previous_model,
-        next_model,
+    assert_eq!(
+        requests.len(),
+        2,
+        "the selected-model turn must not add a request to the previous custom model"
     );
+    assert_eq!(
+        requests[0].body_json()["model"].as_str(),
+        Some(previous_model)
+    );
+    assert_eq!(requests[1].body_json()["model"].as_str(), Some(next_model));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -3662,7 +3406,7 @@ async fn body_after_prefix_model_switch_budget_compacts_with_next_model() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
+async fn pre_sampling_compact_after_resume_uses_selected_smaller_model() {
     skip_if_no_network!();
 
     let server = MockServer::start().await;
@@ -3783,7 +3527,7 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn pre_sampling_compact_recovers_comp_hash_after_resume() {
+async fn resumed_legacy_comp_hash_does_not_trigger_or_route_compaction() {
     skip_if_no_network!();
 
     let server = MockServer::start().await;
@@ -3809,12 +3553,8 @@ async fn pre_sampling_compact_recovers_comp_hash_after_resume() {
                 ev_completed_with_tokens("r1", /*total_tokens*/ 100),
             ]),
             sse(vec![
-                ev_assistant_message("m2", "RESUMED_COMP_HASH_SUMMARY"),
-                ev_completed_with_tokens("r2", /*total_tokens*/ 10),
-            ]),
-            sse(vec![
-                ev_assistant_message("m3", "after resume"),
-                ev_completed_with_tokens("r3", /*total_tokens*/ 100),
+                ev_assistant_message("m2", "after resume"),
+                ev_completed_with_tokens("r2", /*total_tokens*/ 100),
             ]),
         ],
     )
@@ -3895,22 +3635,23 @@ async fn pre_sampling_compact_recovers_comp_hash_after_resume() {
         ))
         .await
         .expect("submit resumed user turn");
-    assert_compaction_uses_turn_lifecycle_id(&resumed.codex).await;
+    wait_for_event(&resumed.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
 
     let requests = request_log.requests();
     assert_eq!(models_mock.requests().len(), 1);
     assert_eq!(
         requests.len(),
-        3,
-        "the resumed turn should compact using the comp hash recovered from rollout"
+        2,
+        "a recovered legacy comp hash must not add a compaction request"
     );
-    assert_pre_sampling_switch_compaction_requests(
-        &requests[0].body_json(),
-        &requests[1].body_json(),
-        &requests[2].body_json(),
-        previous_model,
-        next_model,
+    assert_eq!(
+        requests[0].body_json()["model"].as_str(),
+        Some(previous_model)
     );
+    assert_eq!(requests[1].body_json()["model"].as_str(), Some(next_model));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

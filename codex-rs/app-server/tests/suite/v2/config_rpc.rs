@@ -2619,3 +2619,58 @@ fn assert_layers_managed_user_then_optional_system(
     ));
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_batch_write_updates_model_defaults_and_other_settings() -> Result<()> {
+    let tmp_dir = TempDir::new()?;
+    let codex_home = tmp_dir.path().canonicalize()?;
+    write_config(
+        &tmp_dir,
+        r#"
+model = "gpt-default"
+model_reasoning_effort = "high"
+"#,
+    )?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(&codex_home)
+        .without_auto_env()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+
+    let request_id = mcp
+        .send_config_batch_write_request(ConfigBatchWriteParams {
+            file_path: None,
+            edits: vec![
+                ConfigEdit {
+                    key_path: "model".to_string(),
+                    value: json!("pi-deepseek/v4-flash"),
+                    merge_strategy: MergeStrategy::Replace,
+                },
+                ConfigEdit {
+                    key_path: "model_reasoning_effort".to_string(),
+                    value: json!("ultra"),
+                    merge_strategy: MergeStrategy::Replace,
+                },
+                ConfigEdit {
+                    key_path: "personality".to_string(),
+                    value: json!("pragmatic"),
+                    merge_strategy: MergeStrategy::Replace,
+                },
+            ],
+            expected_version: None,
+            reload_user_config: false,
+        })
+        .await?;
+    let response: ConfigWriteResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
+    assert_eq!(response.status, WriteStatus::Ok);
+
+    let config: toml::Value =
+        toml::from_str(&std::fs::read_to_string(codex_home.join("config.toml"))?)?;
+    assert_eq!(config["model"].as_str(), Some("pi-deepseek/v4-flash"));
+    assert_eq!(config["model_reasoning_effort"].as_str(), Some("ultra"));
+    assert_eq!(config["personality"].as_str(), Some("pragmatic"));
+
+    Ok(())
+}

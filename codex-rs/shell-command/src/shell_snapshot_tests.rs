@@ -166,6 +166,7 @@ fn bash_snapshot_filters_invalid_exports() -> Result<()> {
         .arg(snapshot_script(ShellType::Bash).expect("bash supports snapshots"))
         .env("BASH_ENV", "/dev/null")
         .env("VALID_NAME", "ok")
+        .env("SUDHIR_CODEX_GATEWAY_TOKEN", "snapshot-secret")
         .env("PWD", "/tmp/stale")
         .env("NEXTEST_BIN_EXE_codex-write-config-schema", "/path/to/bin")
         .env("BAD-NAME", "broken")
@@ -175,6 +176,8 @@ fn bash_snapshot_filters_invalid_exports() -> Result<()> {
 
     let stdout = captured_script(ShellType::Bash, &String::from_utf8(output.stdout)?)?;
     assert!(stdout.contains("VALID_NAME"));
+    assert!(!stdout.contains("SUDHIR_CODEX_GATEWAY_TOKEN"));
+    assert!(!stdout.contains("snapshot-secret"));
     assert!(!stdout.contains("PWD=/tmp/stale"));
     assert!(!stdout.contains("NEXTEST_BIN_EXE_codex-write-config-schema"));
     assert!(!stdout.contains("BAD-NAME"));

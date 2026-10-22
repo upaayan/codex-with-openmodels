@@ -1,0 +1,354 @@
+name: native-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing openmodels-v* tag pointing at the selected commit
+        required: true
+        type: string
+      platforms:
+        description: Build one platform; the other reuses this source in a later dispatch
+        required: true
+        type: choice
+        options: [macos, linux]
+        default: macos
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-release-${{ inputs.release_tag }}-${{ inputs.platforms }}
+  cancel-in-progress: false
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+jobs:
+  tag-check:
+    name: Validate release tag and commit
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    outputs:
+      release_tag: ${{ steps.validate.outputs.release_tag }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate selected tag
+        id: validate
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^openmodels-v[0-9][0-9A-Za-z._-]*$ ]]
+          tag_commit="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          [[ "$tag_commit" == "$GITHUB_SHA" ]]
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+
+      - name: Require scheduled fork acceptance before compilation
+        run: python3 scripts/tests/verify_sudhir_fork_contracts.py lint --platform linux
+
+  macos:
+    if: inputs.platforms == 'macos'
+    name: Apple Silicon macOS bundle
+    needs: tag-check
+    runs-on: macos-15
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+      - name: Prepare Python artifact probe dependencies
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        run: |
+          python3 -m pip install --target "${RUNNER_TEMP}/sudhir-python" ./sudhir_codex pyte==0.8.2
+          echo "PYTHONPATH=${RUNNER_TEMP}/sudhir-python" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: aarch64-apple-darwin
+      - name: Configure rusty_v8 artifacts
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: aarch64-apple-darwin
+
+      - name: Build required macOS binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build \
+            --locked \
+            --target aarch64-apple-darwin \
+            --release \
+            --bin codex \
+            --bin codex-code-mode-host \
+            --bin codex-responses-api-proxy
+
+      - name: Strip, ad-hoc sign, and smoke-test
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="${RUNNER_TEMP}/openmodels-macos"
+          release="target/aarch64-apple-darwin/release"
+          export CODEX_HOME="${RUNNER_TEMP}/openmodels-codex-home"
+          mkdir -p "$CODEX_HOME"
+          rm -rf "$stage"
+          mkdir -p "$stage"
+          for binary in codex codex-code-mode-host codex-responses-api-proxy; do
+            cp "$release/$binary" "$stage/$binary"
+            strip -S -x "$stage/$binary"
+            codesign --force --sign - "$stage/$binary"
+            codesign --verify --verbose=2 "$stage/$binary"
+            file "$stage/$binary" | grep -q 'arm64'
+            lipo "$stage/$binary" -verify_arch arm64
+          done
+          "$stage/codex" --version
+          "$stage/codex" --help >/dev/null
+          "$stage/codex" app-server --help >/dev/null
+          "$stage/codex" mcp-server --help >/dev/null
+
+          archive="${GITHUB_WORKSPACE}/codex-with-openmodels-aarch64-apple-darwin.tar.gz"
+          tar -C "$stage" -czf "$archive" \
+            codex \
+            codex-code-mode-host \
+            codex-responses-api-proxy
+
+      - name: Verify model-picker persistence in built app-server
+        shell: bash
+        run: |
+          python3 "${GITHUB_WORKSPACE}/scripts/tests/sudhir_app_server_artifact.py" \
+            "${RUNNER_TEMP}/openmodels-macos/codex"
+
+      - name: Verify plaintext child agents and tool output
+        run: python3 "${GITHUB_WORKSPACE}/scripts/tests/sudhir_agents_artifact.py" "${RUNNER_TEMP}/openmodels-macos/codex"
+
+      - name: Verify core history compaction tools and private state
+        run: python3 "${GITHUB_WORKSPACE}/scripts/tests/sudhir_core_artifact.py" "${RUNNER_TEMP}/openmodels-macos/codex" "${GITHUB_WORKSPACE}"
+      - name: Verify searchable picker and Max Ultra keyboard behavior
+        run: python3 "${GITHUB_WORKSPACE}/scripts/tests/sudhir_tui_artifact.py" "${RUNNER_TEMP}/openmodels-macos/codex" "${GITHUB_WORKSPACE}"
+      - name: Verify native GPT WebSockets and non-GPT HTTP routing
+        run: python3 "${GITHUB_WORKSPACE}/scripts/tests/sudhir_websocket_artifact.py" "${RUNNER_TEMP}/openmodels-macos/codex" "${GITHUB_WORKSPACE}"
+
+      - name: Create and verify platform checksums
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shasum -a 256 codex-with-openmodels-aarch64-apple-darwin.tar.gz > SHA256SUMS
+          shasum -a 256 -c SHA256SUMS
+
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: macos-release-archive
+          path: |
+            codex-with-openmodels-aarch64-apple-darwin.tar.gz
+            SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
+
+  ubuntu:
+    if: inputs.platforms == 'linux'
+    name: Ubuntu 22.04-compatible x64 MUSL bundle
+    needs: tag-check
+    # Match OpenAI's MUSL 1.2.4 release toolchain. The resulting static binary
+    # does not depend on the build host and is tested later on Ubuntu 22.04.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+      - name: Prepare Python artifact probe dependencies
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        run: |
+          python3 -m pip install --target "${RUNNER_TEMP}/sudhir-python" ./sudhir_codex pyte==0.8.2
+          echo "PYTHONPATH=${RUNNER_TEMP}/sudhir-python" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Use a hermetic Cargo home
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_home="${GITHUB_WORKSPACE}/.cargo-home"
+          mkdir -p "${cargo_home}/bin"
+          echo "CARGO_HOME=${cargo_home}" >> "$GITHUB_ENV"
+          echo "${cargo_home}/bin" >> "$GITHUB_PATH"
+          : > "${cargo_home}/config.toml"
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.14.0
+          use-cache: false
+
+      - name: Install MUSL build tools
+        env:
+          TARGET: x86_64-unknown-linux-musl
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
+
+      - name: Install Linux crash diagnostics
+        run: |
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            --no-install-recommends gdb strace
+
+      - name: Disable aws-lc jitter entropy
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "AWS_LC_SYS_NO_JITTER_ENTROPY=1" >> "$GITHUB_ENV"
+          echo "AWS_LC_SYS_NO_JITTER_ENTROPY_x86_64_unknown_linux_musl=1" >> "$GITHUB_ENV"
+
+      - name: Configure rusty_v8 artifacts
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: x86_64-unknown-linux-musl
+
+      - name: Build required Linux binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build \
+            --locked \
+            --target x86_64-unknown-linux-musl \
+            --release \
+            --bin codex \
+            --bin codex-code-mode-host \
+            --bin codex-responses-api-proxy \
+            --bin bwrap
+
+      - name: Strip, stage, and smoke-test
+        shell: bash
+        run: |
+          set -euo pipefail
+          # setup-python is needed only by the rusty_v8 verifier. Do not expose
+          # its host-library override to the native MUSL runtime smoke.
+          unset LD_LIBRARY_PATH
+          stage="${RUNNER_TEMP}/openmodels-linux"
+          release="target/x86_64-unknown-linux-musl/release"
+          export CODEX_HOME="${RUNNER_TEMP}/openmodels-codex-home"
+          mkdir -p "$CODEX_HOME"
+          rm -rf "$stage"
+          mkdir -p "$stage/codex-resources"
+
+          run_codex_smoke() {
+            label="$1"
+            binary="$2"
+            echo "Testing ${label} Linux binary: ${binary}"
+            file "$binary"
+            readelf -h "$binary"
+            readelf -l "$binary"
+            readelf -d "$binary" || true
+            ldd "$binary" || true
+            if readelf -l "$binary" | grep -q 'INTERP'; then
+              echo "${label} Linux binary is not self-contained" >&2
+              return 1
+            fi
+
+            set +e
+            "$binary" --version
+            status=$?
+            set -e
+            if [[ "$status" -ne 0 ]]; then
+              echo "${label} Linux binary exited with status ${status}" >&2
+              gdb -q -batch \
+                -ex "set pagination off" \
+                -ex run \
+                -ex "thread apply all bt" \
+                --args "$binary" --version || true
+              trace="${RUNNER_TEMP}/codex-${label}.strace"
+              strace -f -o "$trace" "$binary" --version || true
+              tail -n 120 "$trace" || true
+              return "$status"
+            fi
+          }
+
+          run_codex_smoke unstripped "$release/codex"
+          for binary in codex codex-code-mode-host codex-responses-api-proxy; do
+            cp "$release/$binary" "$stage/$binary"
+            strip --strip-debug --strip-unneeded "$stage/$binary"
+            file "$stage/$binary" | grep -Eq 'x86-64|x86_64'
+          done
+          cp "$release/bwrap" "$stage/codex-resources/bwrap"
+          file "$stage/codex-resources/bwrap" | grep -Eq 'x86-64|x86_64'
+          run_codex_smoke stripped "$stage/codex"
+          "$stage/codex" --help >/dev/null
+          "$stage/codex" app-server --help >/dev/null
+          "$stage/codex" mcp-server --help >/dev/null
+
+          archive="${GITHUB_WORKSPACE}/codex-with-openmodels-x86_64-unknown-linux-musl.tar.gz"
+          tar -C "$stage" -czf "$archive" \
+            codex \
+            codex-code-mode-host \
+            codex-responses-api-proxy \
+            codex-resources/bwrap
+
+      - name: Verify model-picker persistence in built app-server
+        shell: bash
+        run: |
+          python3 "${GITHUB_WORKSPACE}/scripts/tests/sudhir_app_server_artifact.py" \
+            "${RUNNER_TEMP}/openmodels-linux/codex"
+
+      - name: Verify plaintext child agents and tool output
+        run: python3 "${GITHUB_WORKSPACE}/scripts/tests/sudhir_agents_artifact.py" "${RUNNER_TEMP}/openmodels-linux/codex"
+
+      - name: Strip and hash bundled bwrap
+        shell: bash
+        run: |
+          set -euo pipefail
+          bwrap="target/x86_64-unknown-linux-musl/release/bwrap"
+          strip --strip-debug --strip-unneeded "$bwrap"
+          digest="$(sha256sum "$bwrap" | awk '{print $1}')"
+          echo "CODEX_BWRAP_SHA256=$digest" >> "$GITHUB_ENV"
+          echo "Bundled bwrap sha256:$digest"
+
+      - name: Verify core history compaction tools and private state
+        run: python3 "${GITHUB_WORKSPACE}/scripts/tests/sudhir_core_artifact.py" "${RUNNER_TEMP}/openmodels-linux/codex" "${GITHUB_WORKSPACE}"
+      - name: Verify searchable picker and Max Ultra keyboard behavior
+        run: python3 "${GITHUB_WORKSPACE}/scripts/tests/sudhir_tui_artifact.py" "${RUNNER_TEMP}/openmodels-linux/codex" "${GITHUB_WORKSPACE}"
+      - name: Verify native GPT WebSockets and non-GPT HTTP routing
+        run: python3 "${GITHUB_WORKSPACE}/scripts/tests/sudhir_websocket_artifact.py" "${RUNNER_TEMP}/openmodels-linux/codex" "${GITHUB_WORKSPACE}"
+
+      - name: Create and verify platform checksums
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum codex-with-openmodels-x86_64-unknown-linux-musl.tar.gz > SHA256SUMS
+          sha256sum -c SHA256SUMS
+
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ubuntu-release-archive
+          path: |
+            codex-with-openmodels-x86_64-unknown-linux-musl.tar.gz
+            SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
+

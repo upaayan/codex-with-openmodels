@@ -276,11 +276,16 @@ impl ChatWidget {
             });
         }
 
-        let header = self.model_menu_header("Select Model and Effort", "");
+        let header = self.model_menu_header(
+            "Select Model and Effort",
+            "Type to search by model name or provider.",
+        );
         self.show_model_selection_view(
             model_ids,
             SelectionViewParams {
                 view_id: Some(view_id),
+                is_searchable: true,
+                search_placeholder: Some("Search models or providers".to_string()),
                 items,
                 header,
                 ..SelectionViewParams::picker()
@@ -308,13 +313,6 @@ impl ChatWidget {
                         effort: effort_for_action.clone(),
                     });
                 }
-            } else if effort_for_action == Some(ReasoningEffortConfig::Ultra) {
-                tx.send(
-                    AstraModelPickerAction::ApplyAdvancedReasoning {
-                        effort: ReasoningEffortConfig::Ultra,
-                    }
-                    .into_picker_event(sparkle_thread, model_for_action.clone()),
-                );
             } else if should_prompt_plan_mode_scope {
                 tx.send(AppEvent::OpenPlanReasoningScopePrompt {
                     model: model_for_action.clone(),
@@ -325,11 +323,9 @@ impl ChatWidget {
                     AstraModelPickerAction::UpdateModel
                         .into_picker_event(sparkle_thread, model_for_action.clone()),
                 );
-                tx.send(AppEvent::UpdateReasoningEffort(effort_for_action.clone()));
-                tx.send(AppEvent::PersistModelSelection {
-                    model: model_for_action.clone(),
-                    effort: effort_for_action.clone(),
-                });
+                tx.send(AppEvent::UpdateActiveReasoningEffort(
+                    effort_for_action.clone(),
+                ));
             }
             if let Some(warning) = warning.clone() {
                 tx.send(AppEvent::InsertHistoryCell(Box::new(
@@ -400,7 +396,7 @@ impl ChatWidget {
             "built-in Plan default".to_string()
         };
         let all_modes_description = format!(
-            "Set the global default reasoning level and Plan mode override, replacing the current {plan_reasoning_source}"
+            "Apply to the active task and Plan mode override, replacing {plan_reasoning_source}"
         );
         let subtitle = format!("Choose where to apply {reasoning_phrase}.");
         let warning = effort
@@ -431,13 +427,9 @@ impl ChatWidget {
                 AstraModelPickerAction::UpdateModel
                     .into_picker_event(sparkle_thread, model.clone()),
             );
-            tx.send(AppEvent::UpdateReasoningEffort(effort.clone()));
+            tx.send(AppEvent::UpdateActiveReasoningEffort(effort.clone()));
             tx.send(AppEvent::UpdatePlanModeReasoningEffort(effort.clone()));
             tx.send(AppEvent::PersistPlanModeReasoningEffort(effort.clone()));
-            tx.send(AppEvent::PersistModelSelection {
-                model: model.clone(),
-                effort: effort.clone(),
-            });
             if let Some(warning) = warning.clone() {
                 tx.send(AppEvent::InsertHistoryCell(Box::new(
                     history_cell::new_warning_event(warning),
@@ -509,11 +501,9 @@ impl ChatWidget {
         if all_choices.is_empty() {
             all_choices.push(default_effort.clone());
         }
-        let (choices, advanced_choices): (Vec<_>, Vec<_>) = all_choices
-            .into_iter()
-            .partition(|effort| !Self::is_advanced_reasoning_effort(effort));
+        let choices = all_choices;
 
-        if choices.len() == 1 && advanced_choices.is_empty() {
+        if choices.len() == 1 {
             let selected_effort = choices.first().cloned();
             let selected_model = preset.model;
             if self
@@ -599,36 +589,6 @@ impl ChatWidget {
                     .session_model_selection_action(model_slug.clone(), choice_effort),
                 actions,
                 dismiss_on_select: true,
-                ..Default::default()
-            });
-        }
-
-        if !advanced_choices.is_empty() {
-            let advanced_label = advanced_choices
-                .iter()
-                .map(Self::reasoning_effort_label)
-                .collect::<Vec<_>>()
-                .join(" and ");
-            let verb = if advanced_choices.len() == 1 {
-                "consumes"
-            } else {
-                "consume"
-            };
-            let preset_for_action = preset;
-            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                tx.send(AppEvent::OpenAdvancedReasoningPopup {
-                    model: preset_for_action.clone(),
-                });
-            })];
-            items.push(SelectionItem {
-                name: "More reasoning…".to_string(),
-                description: Some(format!("{advanced_label} {verb} usage limits faster")),
-                is_current: is_current_model
-                    && highlight_choice
-                        .as_ref()
-                        .is_some_and(Self::is_advanced_reasoning_effort),
-                actions,
-                dismiss_parent_on_child_accept: true,
                 ..Default::default()
             });
         }

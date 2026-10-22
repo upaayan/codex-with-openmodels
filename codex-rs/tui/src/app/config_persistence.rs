@@ -1049,13 +1049,20 @@ impl App {
     }
 
     pub(super) fn on_update_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
+        self.config.model_reasoning_effort = effort.clone();
+        self.on_update_active_reasoning_effort(effort);
+    }
+
+    pub(super) fn on_update_active_reasoning_effort(
+        &mut self,
+        effort: Option<ReasoningEffortConfig>,
+    ) {
         let clear_ephemeral_plan_effort = effort != Some(ReasoningEffortConfig::Ultra)
             && self.chat_widget.config_ref().plan_mode_reasoning_effort
                 == Some(ReasoningEffortConfig::Ultra)
             && self.config.plan_mode_reasoning_effort != Some(ReasoningEffortConfig::Ultra);
         // TODO(aibrahim): Remove this and don't use config as a state object.
         // Instead, explicitly pass the stored collaboration mode's effort into new sessions.
-        self.config.model_reasoning_effort = effort.clone();
         self.chat_widget.set_reasoning_effort(effort.clone());
         if clear_ephemeral_plan_effort {
             self.chat_widget.set_plan_mode_reasoning_effort(effort);
@@ -1066,6 +1073,14 @@ impl App {
         &mut self,
         effort: Option<ReasoningEffortConfig>,
     ) {
+        self.config.plan_mode_reasoning_effort = effort.clone();
+        self.on_update_active_plan_mode_reasoning_effort(effort);
+    }
+
+    pub(super) fn on_update_active_plan_mode_reasoning_effort(
+        &mut self,
+        effort: Option<ReasoningEffortConfig>,
+    ) {
         let clear_ephemeral_default_effort = effort != Some(ReasoningEffortConfig::Ultra)
             && self
                 .chat_widget
@@ -1073,7 +1088,6 @@ impl App {
                 .reasoning_effort()
                 == Some(ReasoningEffortConfig::Ultra)
             && self.config.model_reasoning_effort != Some(ReasoningEffortConfig::Ultra);
-        self.config.plan_mode_reasoning_effort = effort.clone();
         self.chat_widget
             .set_plan_mode_reasoning_effort(effort.clone());
         if clear_ephemeral_default_effort {

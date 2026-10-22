@@ -719,9 +719,9 @@ impl ModelClient {
     pub(crate) fn force_http_fallback(
         &self,
         session_telemetry: &SessionTelemetry,
-        _model_info: &ModelInfo,
+        model_info: &ModelInfo,
     ) -> bool {
-        let websocket_enabled = self.responses_websocket_enabled();
+        let websocket_enabled = self.responses_websocket_enabled_for_model(model_info);
         let activated =
             websocket_enabled && !self.state.disable_websockets.swap(true, Ordering::Relaxed);
         if activated {
@@ -1113,6 +1113,12 @@ impl ModelClient {
         true
     }
 
+    pub(crate) fn responses_websocket_enabled_for_model(&self, model_info: &ModelInfo) -> bool {
+        self.responses_websocket_enabled()
+            && !(self.state.provider.info().name == "Sudhir Gateway"
+                && (model_info.slug.starts_with("pi-") || model_info.slug.starts_with("cursor/")))
+    }
+
     /// Returns auth + provider configuration resolved from the current session auth state.
     ///
     /// This centralizes setup used by both prewarm and normal request paths so they stay in
@@ -1182,6 +1188,13 @@ impl ModelClient {
     }
 
     fn responses_headers(&self, auth: Option<&CodexAuth>, model: &str) -> ApiHeaderMap {
+        if self.state.provider.info().name == "Sudhir Gateway" {
+            let mut headers = ApiHeaderMap::new();
+            if let Ok(value) = HeaderValue::from_str(model) {
+                headers.insert("x-sudhir-selected-model", value);
+            }
+            return headers;
+        }
         self.codex_responses_headers
             .as_ref()
             .filter(|config| {
@@ -1564,7 +1577,10 @@ impl ModelClientSession {
         session_telemetry: &SessionTelemetry,
         responses_metadata: &CodexResponsesMetadata,
     ) -> Result<()> {
-        if !self.client.responses_websocket_enabled() {
+        if !self
+            .client
+            .responses_websocket_enabled_for_model(model_info)
+        {
             return Ok(());
         }
         let provider = Arc::clone(&self.client.state.provider);
@@ -2303,7 +2319,10 @@ impl ModelClientSession {
         service_tier: Option<String>,
         responses_metadata: &CodexResponsesMetadata,
     ) -> Result<()> {
-        if !self.client.responses_websocket_enabled() {
+        if !self
+            .client
+            .responses_websocket_enabled_for_model(model_info)
+        {
             return Ok(());
         }
         if self.is_websocket_prewarmed().await {
@@ -2368,7 +2387,10 @@ impl ModelClientSession {
         let wire_api = self.client.state.provider.info().wire_api;
         match wire_api {
             WireApi::Responses => {
-                if self.client.responses_websocket_enabled() {
+                if self
+                    .client
+                    .responses_websocket_enabled_for_model(model_info)
+                {
                     let request_trace = current_span_w3c_trace_context();
                     match self
                         .stream_responses_websocket(

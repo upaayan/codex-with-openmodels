@@ -19,6 +19,21 @@ use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::protocol::MultiAgentVersion;
 
 pub(crate) const MAX_SPAWN_AGENT_MODEL_OVERRIDES: usize = 5;
+pub(crate) const MAX_SPAWN_AGENT_MODEL_TEXT_BYTES: usize = 3_000;
+
+pub(crate) fn truncate_spawn_agent_model_text(mut text: String) -> String {
+    if text.len() <= MAX_SPAWN_AGENT_MODEL_TEXT_BYTES {
+        return text;
+    }
+    let suffix = "…";
+    let mut end = MAX_SPAWN_AGENT_MODEL_TEXT_BYTES.saturating_sub(suffix.len());
+    while !text.is_char_boundary(end) {
+        end = end.saturating_sub(1);
+    }
+    text.truncate(end);
+    text.push_str(suffix);
+    text
+}
 
 pub(crate) fn model_supports_multi_agent_backend(
     model: &ModelPreset,
@@ -323,7 +338,7 @@ async fn apply_spawn_agent_role(
     )
 }
 
-fn find_spawn_agent_model_name(
+pub(crate) fn find_spawn_agent_model_name(
     available_models: &[ModelPreset],
     requested_model: &str,
     multi_agent_version: MultiAgentVersion,
@@ -336,17 +351,20 @@ fn find_spawn_agent_model_name(
         })
         .map(|model| model.model.clone())
         .ok_or_else(|| {
-            let available = available_models
+            let eligible_models = available_models
                 .iter()
                 .filter(|model| model.show_in_picker)
                 .filter(|model| model_supports_multi_agent_backend(model, multi_agent_version))
+                .collect::<Vec<_>>();
+            let eligible_count = eligible_models.len();
+            let available = eligible_models.into_iter()
                 .take(MAX_SPAWN_AGENT_MODEL_OVERRIDES)
                 .map(|model| model.model.as_str())
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!(
-                "Unknown model `{requested_model}` for spawn_agent. Available models: {available}"
-            )
+            truncate_spawn_agent_model_text(format!(
+                "Unknown model `{requested_model}` for spawn_agent. There are {eligible_count} eligible picker models. Bounded sample (not exhaustive): {available}. Use an exact `/model` or `sudhir-codex models` ID."
+            ))
         })
 }
 

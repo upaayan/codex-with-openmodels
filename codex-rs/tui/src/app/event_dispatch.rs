@@ -2101,6 +2101,10 @@ impl App {
                         .on_connector_mentions_loaded(generation, result);
                 }
             }
+            AppEvent::UpdateActiveReasoningEffort(effort) => {
+                self.on_update_active_reasoning_effort(effort.clone());
+                self.sync_active_thread_reasoning_setting(app_server, effort).await;
+            }
             AppEvent::UpdateReasoningEffort(effort) => {
                 self.on_update_reasoning_effort(effort.clone());
                 self.sync_active_thread_reasoning_setting(app_server, effort)
@@ -2745,6 +2749,10 @@ impl App {
             }
             AppEvent::UpdateRateLimitSwitchPromptHidden(hidden) => {
                 self.chat_widget.set_rate_limit_switch_prompt_hidden(hidden);
+            }
+            AppEvent::UpdateActivePlanModeReasoningEffort(effort) => {
+                self.on_update_active_plan_mode_reasoning_effort(effort);
+                self.sync_active_thread_plan_mode_reasoning_setting(app_server).await;
             }
             AppEvent::UpdatePlanModeReasoningEffort(effort) => {
                 self.on_update_plan_mode_reasoning_effort(effort);

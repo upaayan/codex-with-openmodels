@@ -222,6 +222,8 @@ mod stream_no_completed;
 mod subagent_dynamic_tools;
 mod subagent_notifications;
 mod subagent_service_tier;
+mod sudhir_cross_provider_agents;
+mod sudhir_model_continuity;
 mod token_budget;
 mod token_usage_rollout;
 mod tool_harness;

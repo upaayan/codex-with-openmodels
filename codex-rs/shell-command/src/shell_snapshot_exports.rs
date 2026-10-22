@@ -9,7 +9,7 @@ pub(super) fn script(shell_type: ShellType) -> String {
             r#"(
   while IFS= read -r __codex_snapshot_export_name; do
     case "$__codex_snapshot_export_name" in
-      ""|[0-9]*|*[!A-Za-z0-9_]*|PWD|OLDPWD) continue ;;
+      ""|[0-9]*|*[!A-Za-z0-9_]*|PWD|OLDPWD|SUDHIR_CODEX_GATEWAY_TOKEN) continue ;;
     esac
     RECORD_START
     declare -xp "$__codex_snapshot_export_name" 2>/dev/null || true
@@ -24,7 +24,7 @@ pub(super) fn script(shell_type: ShellType) -> String {
   # Some Zsh builds do not include the zsh/parameter module.
   for __codex_snapshot_export_name in ${(f)"$(typeset +x)"}; do
     case "$__codex_snapshot_export_name" in
-      ""|[0-9]*|*[!A-Za-z0-9_]*|PWD|OLDPWD) continue ;;
+      ""|[0-9]*|*[!A-Za-z0-9_]*|PWD|OLDPWD|SUDHIR_CODEX_GATEWAY_TOKEN) continue ;;
     esac
     case "${(tP)__codex_snapshot_export_name}" in
       *readonly*) continue ;;
@@ -44,7 +44,7 @@ export -p | __codex_snapshot_command awk '
 /^(export|declare -x|typeset -x) [A-Za-z_][A-Za-z0-9_]*$/ {
   name=$0
   sub(/^(export|declare -x|typeset -x) /, "", name)
-  if (name ~ /^(PWD|OLDPWD)$/) {
+  if (name ~ /^(PWD|OLDPWD|SUDHIR_CODEX_GATEWAY_TOKEN)$/) {
     next
   }
   if (!seen[name]++) {

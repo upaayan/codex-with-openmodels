@@ -1,0 +1,156 @@
+name: source-ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: source-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  public-source:
+    name: Public source boundaries
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Check licence, files, and workflow surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f LICENSE
+          test -f NOTICE
+          test -f MODIFICATIONS.md
+          test -f .github/upstream-base.txt
+
+          workflow_count="$(
+            find .github/workflows -maxdepth 1 -type f \
+              \( -name '*.yml' -o -name '*.yaml' \) |
+              wc -l |
+              tr -d ' '
+          )"
+          [[ "$workflow_count" == "4" ]]
+
+          forbidden_paths=(
+            documents/BACKEND-MONTHLY-UPGRADE.md
+            documents/FRONTEND-UPDATE.md
+            documents/README.md
+            documents/THREAD-IMPORT.md
+            documents/plan-audit-implementation/sudhir_codex_audit.md
+            documents/plan-audit-implementation/sudhir_codex_implementation.md
+            documents/plan-audit-implementation/sudhir_codex_plan.md
+            scripts/normalize-sudhir-thread-providers.rb
+          )
+          for path in "${forbidden_paths[@]}"; do
+            if git ls-files --error-unmatch "$path" >/dev/null 2>&1; then
+              echo "Private operational file is tracked: $path" >&2
+              exit 1
+            fi
+          done
+
+          if git ls-files | grep -E '(^|/)(node_modules|target|dist|\.venv|\.toolchains)(/|$)'; then
+            echo "Generated or machine-local content is tracked" >&2
+            exit 1
+          fi
+          privileged_pr_trigger="pull_request""_target"
+          if git grep -n "$privileged_pr_trigger" -- .github/workflows; then
+            echo "A privileged pull-request trigger is forbidden" >&2
+            exit 1
+          fi
+          if git grep -nE '/Users/|/Applications/Sudhir-Codex\.app' \
+            -- README.md MODIFICATIONS.md sudhir_codex/README.md; then
+            echo "Personal or private desktop paths remain in public documentation" >&2
+            exit 1
+          fi
+
+          native_windows_build_job="windows""-build"
+          native_windows_bundle_job="win""dows"
+          source_windows_job="gateway""-windows"
+          native_jobs="$(sed -n 's/^  \([A-Za-z0-9_-]*\):$/\1/p' .github/workflows/native-release.yml)"
+          source_jobs="$(sed -n 's/^  \([A-Za-z0-9_-]*\):$/\1/p' .github/workflows/source-ci.yml)"
+          for job in "$native_windows_build_job" "$native_windows_bundle_job"; do
+            if grep -Fxq "$job" <<<"$native_jobs"; then
+              echo "Sudhir native Windows release job returned: $job" >&2
+              exit 1
+            fi
+          done
+          if grep -Fxq "$source_windows_job" <<<"$source_jobs"; then
+            echo "Sudhir Windows backend CI job returned: $source_windows_job" >&2
+            exit 1
+          fi
+
+          native_windows_installer="scripts/sudhir-codex"".ps1"
+          if [ -e "$native_windows_installer" ]; then
+            echo "Native Windows backend installer returned" >&2
+            exit 1
+          fi
+          scoped_windows_policy_paths=(
+            .github/workflows/native-release.yml
+            .github/workflows/source-ci.yml
+            README.md
+            WINDOWS-QUICKSTART.md
+            MODIFICATIONS.md
+            sudhir_codex/README.md
+          )
+          forbidden_windows_tokens=(
+            "codex-with-openmodels-x86_64-pc-windows-msvc"".zip"
+            "windows-release-""binaries"
+            "windows-release-""archive"
+            "sudhir-codex-core"".exe"
+            "sudhir-codex"".cmd"
+            "scripts/sudhir-codex"".ps1"
+            "scripts\\sudhir-codex"".ps1"
+          )
+          for token in "${forbidden_windows_tokens[@]}"; do
+            if git grep -nF "$token" -- "${scoped_windows_policy_paths[@]}"; then
+              echo "Native Windows backend policy token returned" >&2
+              exit 1
+            fi
+          done
+
+  gateway-linux:
+    name: Gateway and Cursor worker (Ubuntu)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: "22.13.1"
+          cache: npm
+          cache-dependency-path: sudhir_codex/cursor_worker/package-lock.json
+
+      - name: Install the gateway test environment
+        run: python -m pip install --disable-pip-version-check --editable ./sudhir_codex ruff==0.15.13
+
+      - name: Check the pinned Cursor worker
+        working-directory: sudhir_codex/cursor_worker
+        run: |
+          npm ci --omit=dev
+          node --check worker.mjs
+          npm ls --omit=dev @cursor/sdk
+
+      - name: Check and test the gateway
+        run: |
+          python -m compileall -q sudhir_codex/src sudhir_codex/tests
+          python scripts/tests/verify_sudhir_fork_contracts.py lint --platform linux
+          python -m unittest scripts.tests.sudhir_native_packaging_contracts
+          python scripts/tests/run_sudhir_fork_contracts.py --platform linux --phase prebuild --evidence artifacts/fork-contracts-linux-prebuild.json
+          python scripts/tests/sudhir_targeted_regressions.py gateway
+          ruff check sudhir_codex/src sudhir_codex/tests
+          bash scripts/tests/install-sudhir-codex.tests.sh

@@ -49,6 +49,7 @@ use futures::future::Shared;
 use std::path::PathBuf;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicBool;
+#[cfg(test)]
 use std::sync::atomic::Ordering;
 use tracing::instrument;
 
@@ -767,6 +768,7 @@ impl TurnContext {
             && self.config.orchestrator_mcp_enabled
     }
 
+    #[cfg(test)]
     pub(crate) async fn with_model(
         &self,
         model: String,
