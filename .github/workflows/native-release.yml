@@ -61,7 +61,7 @@ jobs:
     if: inputs.platforms == 'macos'
     name: Apple Silicon macOS bundle
     needs: tag-check
-    runs-on: macos-15
+    runs-on: blacksmith-12vcpu-macos-15
     timeout-minutes: 360
     defaults:
       run:
