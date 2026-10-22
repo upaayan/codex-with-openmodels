@@ -38,3 +38,11 @@ uses an ephemeral loopback debugging port; `SUDHIR_CODEX_DEVTOOLS=0` omits it.
 The built-in Developer menu remains unavailable in production mode. The official
 application, signatures, provider identity and cloud executor are preserved.
 
+
+### Native candidate preservation
+
+Native jobs use the GitHub-hosted maximum of six hours. After packaging, the
+workflow saves one checksummed build candidate before artifact tests, so a failed
+test can be rerun against those bytes without compiling Rust again. A saved
+candidate is eligible for installation only after all required acceptance checks
+pass; upload alone is not acceptance. Artifacts are retained for 30 days.

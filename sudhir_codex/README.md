@@ -369,3 +369,11 @@ There is no automatic fallback to another version. If detection fails without
 an override, GPT catalog loading uses its existing cache/unavailable behavior;
 Pi and Cursor routes remain available. Restart after replacing the core or
 changing the override. A gateway restart interrupts active gateway requests.
+
+### Native candidate preservation
+
+Native jobs use the GitHub-hosted maximum of six hours. After packaging, the
+workflow saves one checksummed build candidate before artifact tests, so a failed
+test can be rerun against those bytes without compiling Rust again. A saved
+candidate is eligible for installation only after all required acceptance checks
+pass; upload alone is not acceptance. Artifacts are retained for 30 days.

@@ -62,7 +62,7 @@ jobs:
     name: Apple Silicon macOS bundle
     needs: tag-check
     runs-on: macos-15
-    timeout-minutes: 90
+    timeout-minutes: 360
     defaults:
       run:
         working-directory: codex-rs
@@ -129,6 +129,23 @@ jobs:
             codex-code-mode-host \
             codex-responses-api-proxy
 
+      - name: Create and verify platform checksums
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shasum -a 256 codex-with-openmodels-aarch64-apple-darwin.tar.gz > SHA256SUMS
+          shasum -a 256 -c SHA256SUMS
+
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: macos-build-candidate
+          path: |
+            codex-with-openmodels-aarch64-apple-darwin.tar.gz
+            SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Verify model-picker persistence in built app-server
         shell: bash
         run: |
@@ -145,22 +162,11 @@ jobs:
       - name: Verify native GPT WebSockets and non-GPT HTTP routing
         run: python3 "${GITHUB_WORKSPACE}/scripts/tests/sudhir_websocket_artifact.py" "${RUNNER_TEMP}/openmodels-macos/codex" "${GITHUB_WORKSPACE}"
 
-      - name: Create and verify platform checksums
-        working-directory: ${{ github.workspace }}
+      - name: Mark native candidate accepted
         shell: bash
         run: |
-          set -euo pipefail
-          shasum -a 256 codex-with-openmodels-aarch64-apple-darwin.tar.gz > SHA256SUMS
-          shasum -a 256 -c SHA256SUMS
-
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        with:
-          name: macos-release-archive
-          path: |
-            codex-with-openmodels-aarch64-apple-darwin.tar.gz
-            SHA256SUMS
-          if-no-files-found: error
-          retention-days: 30
+          echo "All native acceptance checks passed for ${GITHUB_SHA}." >> "$GITHUB_STEP_SUMMARY"
+          echo "The earlier uploaded build candidate is now eligible for installation." >> "$GITHUB_STEP_SUMMARY"
 
   ubuntu:
     if: inputs.platforms == 'linux'
@@ -169,7 +175,7 @@ jobs:
     # Match OpenAI's MUSL 1.2.4 release toolchain. The resulting static binary
     # does not depend on the build host and is tested later on Ubuntu 22.04.
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 360
     defaults:
       run:
         working-directory: codex-rs
@@ -309,6 +315,23 @@ jobs:
             codex-responses-api-proxy \
             codex-resources/bwrap
 
+      - name: Create and verify platform checksums
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum codex-with-openmodels-x86_64-unknown-linux-musl.tar.gz > SHA256SUMS
+          sha256sum -c SHA256SUMS
+
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ubuntu-build-candidate
+          path: |
+            codex-with-openmodels-x86_64-unknown-linux-musl.tar.gz
+            SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Verify model-picker persistence in built app-server
         shell: bash
         run: |
@@ -335,20 +358,9 @@ jobs:
       - name: Verify native GPT WebSockets and non-GPT HTTP routing
         run: python3 "${GITHUB_WORKSPACE}/scripts/tests/sudhir_websocket_artifact.py" "${RUNNER_TEMP}/openmodels-linux/codex" "${GITHUB_WORKSPACE}"
 
-      - name: Create and verify platform checksums
-        working-directory: ${{ github.workspace }}
+      - name: Mark native candidate accepted
         shell: bash
         run: |
-          set -euo pipefail
-          sha256sum codex-with-openmodels-x86_64-unknown-linux-musl.tar.gz > SHA256SUMS
-          sha256sum -c SHA256SUMS
-
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        with:
-          name: ubuntu-release-archive
-          path: |
-            codex-with-openmodels-x86_64-unknown-linux-musl.tar.gz
-            SHA256SUMS
-          if-no-files-found: error
-          retention-days: 30
+          echo "All native acceptance checks passed for ${GITHUB_SHA}." >> "$GITHUB_STEP_SUMMARY"
+          echo "The earlier uploaded build candidate is now eligible for installation." >> "$GITHUB_STEP_SUMMARY"
 

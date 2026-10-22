@@ -24,7 +24,7 @@ def _job_block(text: str, job: str) -> str:
 
 
 def assert_agent_acceptance_scheduled(workflow: str) -> None:
-    """SC-AGENTS-001 must run on each native artifact before it can be uploaded."""
+    """SC-AGENTS-001 must gate acceptance of each captured native candidate."""
     gate = "python3 scripts/tests/verify_sudhir_fork_contracts.py lint --platform linux"
     if gate not in _job_block(workflow, "tag-check"):
         raise AssertionError(
@@ -55,11 +55,12 @@ def assert_agent_acceptance_scheduled(workflow: str) -> None:
             )
         if (
             not block.index("cargo build")
-            < block.index(command)
             < block.index("actions/upload-artifact@")
+            < block.index(command)
+            < block.index("- name: Mark native candidate accepted")
         ):
             raise AssertionError(
-                f"{job}: agent acceptance must follow compilation and precede upload"
+                f"{job}: candidate capture must precede tests, and agent acceptance must gate installation"
             )
 
 
@@ -138,6 +139,13 @@ class NativePackagingContracts(unittest.TestCase):
             self.assertIn(" > SHA256SUMS", block)
             self.assertIn(f"{tool} -c SHA256SUMS", block)
             self.assertIn("retention-days: 30", block)
+            self.assertIn("timeout-minutes: 360", block)
+            self.assertIn("name: " + ("macos" if job == "macos" else "ubuntu") + "-build-candidate", block)
+            accepted = block.index("- name: Mark native candidate accepted")
+            captured = block.index("actions/upload-artifact@")
+            for probe in ("sudhir_app_server_artifact.py", "sudhir_agents_artifact.py", "sudhir_core_artifact.py", "sudhir_tui_artifact.py", "sudhir_websocket_artifact.py"):
+                self.assertLess(captured, block.index(probe))
+                self.assertLess(block.index(probe), accepted)
         self.assertNotIn("pc-windows-msvc", workflow)
 
     def test_extracted_archive_starts_required_commands(self) -> None:

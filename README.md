@@ -132,3 +132,11 @@ See [MODIFICATIONS.md](MODIFICATIONS.md) for the fork's modification summary.
 The upstream work and this fork are distributed under the
 [Apache License 2.0](LICENSE). Existing attribution is retained in
 [NOTICE](NOTICE).
+
+### Native candidate preservation
+
+Native jobs use the GitHub-hosted maximum of six hours. After packaging, the
+workflow saves one checksummed build candidate before artifact tests, so a failed
+test can be rerun against those bytes without compiling Rust again. A saved
+candidate is eligible for installation only after all required acceptance checks
+pass; upload alone is not acceptance. Artifacts are retained for 30 days.
