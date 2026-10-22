@@ -31,6 +31,9 @@ This branch targets upstream Codex **0.163.0** at
 GitHub Actions one platform at a time, starting with Apple Silicon macOS.
 The candidate is not an accepted replacement until its recorded artifact checks pass.
 
+The upstream removal of legacy `codex mcp-server` also applies to this fork.
+The corresponding startup smoke check no longer claims that mode is available.
+
 GPT inference can use an authenticated Responses WebSocket through the gateway.
 Pi and Cursor keep their existing HTTP adapters. Set `SUDHIR_CODEX_WEBSOCKETS=0`
 when launching to restore HTTP-only operation. Production-mode external DevTools

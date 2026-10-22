@@ -34,6 +34,7 @@ class WebSocketRelayTests(unittest.TestCase):
         class Peer(socketserver.BaseRequestHandler):
             def handle(self):
                 ws = WSConnection(ConnectionType.SERVER)
+                message_parts = []
                 try:
                     while True:
                         data = self.request.recv(65536)
@@ -55,7 +56,11 @@ class WebSocketRelayTests(unittest.TestCase):
                                     (b"x-codex-turn-state", b"fixture-state"), (b"openai-model", b"gpt-fixture"),
                                 ])))
                             elif isinstance(event, TextMessage):
-                                payload = json.loads(event.data)
+                                message_parts.append(event.data)
+                                if not event.message_finished:
+                                    continue
+                                payload = json.loads("".join(message_parts))
+                                message_parts.clear()
                                 owner.requests.append(payload)
                                 for response in owner.response_events(payload):
                                     self.request.sendall(ws.send(TextMessage(data=json.dumps(response))))

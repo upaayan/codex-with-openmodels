@@ -492,7 +492,7 @@ always = false
 
 [[contract]]
 id = "SC-PACKAGING-002"
-behavior = "The extracted native archive starts the CLI, app-server help, and MCP help before installation"
+behavior = "The extracted native archive starts the CLI and app-server help before installation"
 patch = "fork[packaging]"
 source = [".github/workflows/native-release.yml", "scripts/install-sudhir-codex"]
 test_file = "scripts/tests/sudhir_native_packaging_contracts.py"

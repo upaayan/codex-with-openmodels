@@ -245,6 +245,10 @@ impl ChatWidget {
         let mut items: Vec<SelectionItem> = Vec::new();
         let model_ids = presets.iter().map(|preset| preset.model.clone()).collect();
         for preset in presets.into_iter() {
+            let search_value = format!(
+                "{} {} {}",
+                preset.model, preset.display_name, preset.description
+            );
             let description =
                 (!preset.description.is_empty()).then_some(preset.description.to_string());
             let is_current = preset.model.as_str() == self.current_model();
@@ -272,6 +276,7 @@ impl ChatWidget {
                 actions,
                 dismiss_on_select: single_supported_effort,
                 dismiss_parent_on_child_accept: !single_supported_effort,
+                search_value: Some(search_value),
                 ..Default::default()
             });
         }

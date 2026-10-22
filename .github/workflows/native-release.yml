@@ -121,7 +121,6 @@ jobs:
           "$stage/codex" --version
           "$stage/codex" --help >/dev/null
           "$stage/codex" app-server --help >/dev/null
-          "$stage/codex" mcp-server --help >/dev/null
 
           archive="${GITHUB_WORKSPACE}/codex-with-openmodels-aarch64-apple-darwin.tar.gz"
           tar -C "$stage" -czf "$archive" \
@@ -306,7 +305,6 @@ jobs:
           run_codex_smoke stripped "$stage/codex"
           "$stage/codex" --help >/dev/null
           "$stage/codex" app-server --help >/dev/null
-          "$stage/codex" mcp-server --help >/dev/null
 
           archive="${GITHUB_WORKSPACE}/codex-with-openmodels-x86_64-unknown-linux-musl.tar.gz"
           tar -C "$stage" -czf "$archive" \

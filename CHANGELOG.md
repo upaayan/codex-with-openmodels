@@ -7,6 +7,7 @@ The changelog can be found on the [releases page](https://github.com/openai/code
 ## Codex with Open Models 0.163.0 candidate
 
 - Reconcile the fork and current gateway fixes onto upstream 0.163.0.
+- Follow upstream removal of the legacy `codex mcp-server` mode.
 - Add GPT WebSockets with per-model HTTP routing for Pi/Cursor and an HTTP-only opt-out.
 - Add reversible production-mode external debugging flags to the desktop launcher.
 - Build Mac and Linux separately in GitHub Actions, preserving verified archives for reuse.

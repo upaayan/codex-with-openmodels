@@ -156,11 +156,10 @@ class NativePackagingContracts(unittest.TestCase):
             "--version",
             "--help",
             "app-server --help",
-            "mcp-server --help",
         ):
             self.assertIn(f'"$stage/codex" {invocation}', macos)
         self.assertIn('"$binary" --version', ubuntu)
-        for invocation in ("--help", "app-server --help", "mcp-server --help"):
+        for invocation in ("--help", "app-server --help"):
             self.assertIn(f'"$stage/codex" {invocation}', ubuntu)
         self.assertNotRegex(workflow, r"(?m)^\s+runs-on:\s*windows-")
 

@@ -247,10 +247,21 @@ def verify_pair(binary: Path, parent: str, child: str, fork: str) -> None:
                 for part in item.get("content", [])
                 if part.get("type") == "input_text"
             }
-            expected_messages = {
-                CHILD + ":" + operation for operation in ("spawn", "send", "followup")
-            }
-            if not expected_messages <= delivered:
+            # 0.163 wraps the intact plaintext payload in its upstream envelope.
+            # Keep raw payload support for the retained 0.153 rollback baseline.
+            expected_messages = [
+                {
+                    CHILD + ":" + operation,
+                    f"Message Type: {kind}\nTask name: /root/worker\n"
+                    f"Sender: /root\nPayload:\n{CHILD}:{operation}",
+                }
+                for operation, kind in (
+                    ("spawn", "NEW_TASK"),
+                    ("send", "MESSAGE"),
+                    ("followup", "NEW_TASK"),
+                )
+            ]
+            if not all(expected & delivered for expected in expected_messages):
                 failures.append(
                     "spawn/send/followup plaintext messages were not all delivered intact"
                 )

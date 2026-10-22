@@ -51,7 +51,10 @@ def verify(binary: Path, repo: Path):
             os.setsid()
             fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
 
-        process = subprocess.Popen([str(binary), "--no-alt-screen"], cwd=home, env=environment,
+        command = [str(binary), "--no-alt-screen"]
+        if "--no-daemon" in subprocess.check_output([str(binary), "--help"], env=environment, text=True):
+            command.append("--no-daemon")
+        process = subprocess.Popen(command, cwd=home, env=environment,
                                    stdin=slave, stdout=slave, stderr=slave, preexec_fn=child_terminal)
         os.close(slave)
 

@@ -227,26 +227,10 @@ Hosted ChatGPT web search remains available to GPT models. Pi models do not
 receive the provider-hosted web-search tool; when Codex has a standalone
 `web.run` extension, that normal client-executed tool can still be used.
 
-## Exposing Sudhir-Codex as an MCP server
+## Legacy MCP server mode
 
-The fork retains the upstream MCP server:
-
-```bash
-sudhir-codex mcp-server
-```
-
-An MCP client can register it independently:
-
-```toml
-[mcp_servers.sudhir_codex]
-command = "/path/to/sudhir-codex"
-args = ["mcp-server"]
-```
-
-The MCP `codex` tool accepts its normal `model` override. Use any exact ID from
-`sudhir-codex models`, including a GPT, `pi-...`, or `cursor/...` ID.
-MCP-created Codex tasks use the same private home, merged catalog, gateway, and
-`sudhir_agents` namespace.
+Upstream Codex 0.163 removed the legacy `codex mcp-server` command. This fork
+follows that removal; `sudhir-codex mcp-server` is unavailable in 0.163.
 
 ## Authentication
 
