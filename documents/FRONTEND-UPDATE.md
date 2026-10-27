@@ -1,3 +1,14 @@
+# Desktop-tools preservation — 26 October 2026
+
+Desktop-tools restoration uses the shipped authenticated local HTTP MCP bridge, per-chat in-memory configuration and the existing native catalogue/handlers. The gateway, provider, native authorizer and private home/profile stay in place. The required pinned-launch verifier prevents a future unpatched or incompatible frontend from silently removing it.
+
+Follow [Desktop-tools maintenance and rollback](/Users/sudhirjha/.playground/sudhir-codex-app/documents/DESKTOP-TOOLS.md) for frontend **and backend** updates. Read the [implementation/release state](/Users/sudhirjha/.playground/sudhir-codex-app/documents/plan-audit-implementation/desktop_tools_http_implementation.md) before treating a candidate as activated. Current status: `scripts/frontend-status` in the frontend repository checks the actual pinned target, bridge and signatures. Never bypass this gate or run legacy `ensure-primary` for the pinned workflow. Preserve the exact current small launcher and unchanged prior target for reversal; do not restore whole config/auth/history.
+
+Current 27 October target: `~/Library/Application Support/Sudhir-Codex-Pinned/versions/26.1016.51333-desktop-tools.1/Codex.app`. V6 full live acceptance passed in place after the owner's manual relaunch, with final Astra/max Round6 PASS; the release is accepted. The previous Urvashi target/exact launcher remain rollback. This current note supersedes older active-target claims; follow the linked release record for final status.
+
+
+---
+
 # Sudhir-Codex frontend update
 
 ## Urvashi cloud-to-Mac launch boundary — 2026-10-01
