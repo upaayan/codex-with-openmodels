@@ -334,6 +334,38 @@ The local route journal records timestamp, model ID, provider ID, destination
 hostname, status, and duration. It does not record prompts, tool data, response
 bodies, or credentials.
 
+### WebSockets and DevTools
+
+GPT inference can use an authenticated Responses WebSocket through the gateway.
+Pi and Cursor keep their existing HTTP adapters. Set `SUDHIR_CODEX_WEBSOCKETS=0`
+when launching to restore HTTP-only operation. Production-mode external DevTools
+uses an ephemeral loopback debugging port; `SUDHIR_CODEX_DEVTOOLS=0` omits it.
+The built-in Developer menu remains unavailable in production mode. The official
+application, signatures, provider identity and cloud executor are preserved.
+
+### Catalog version compatibility
+
+The gateway detects the installed core directly with `--version` once at startup.
+The GPT catalog uses that version by default. Both desktop catalog requests and
+`sudhir-codex models` use this same gateway decision. Health/status JSON shows
+`catalog_version.actual`, `effective`, `override`, and `detection_error`.
+
+```bash
+sudhir-codex gateway catalog-version
+sudhir-codex gateway catalog-version 0.153.2
+sudhir-codex gateway stop
+sudhir-codex gateway start
+# Restore the honest default, then restart the gateway:
+sudhir-codex gateway catalog-version --clear
+```
+
+The explicit override persists in the private state's
+`gateway/catalog-version-override`, outside frontend-managed `config.toml`.
+There is no automatic fallback to another version. If detection fails without
+an override, GPT catalog loading uses its existing cache/unavailable behavior;
+Pi and Cursor routes remain available. Restart after replacing the core or
+changing the override. A gateway restart interrupts active gateway requests.
+
 ## Telemetry
 
 The launcher forcibly disables optional Codex analytics delivery, feedback,
