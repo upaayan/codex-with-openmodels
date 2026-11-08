@@ -9,7 +9,7 @@ to this WSL2 backend through `wsl.exe`.
 - WSL2 with a Linux distribution
 - Git
 - Python 3.11 or newer
-- Node.js 22.13 or newer
+- Node.js 22.19.0 or newer
 - `uv`
 
 Run all commands below in the WSL2 shell, not native PowerShell.

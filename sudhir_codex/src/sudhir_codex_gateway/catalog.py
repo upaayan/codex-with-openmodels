@@ -17,6 +17,8 @@ OPENAI_CODEX_PROVIDER = "openai-codex"
 MODEL_ID_PREFIX = "pi-"
 SUPPORTED_OPEN_MODEL_APIS = {
     "anthropic-messages",
+    "google-generative-ai",
+    "google-vertex",
     "openai-completions",
     "openai-responses",
 }
@@ -24,9 +26,17 @@ SUPPORTED_OPEN_MODEL_APIS = {
 # Some built-in providers have known defaults even when models.json omits them.
 # Keep this deliberately small: an unknown provider must be explicit.
 KNOWN_PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
+    "google": {
+        "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+        "api": "google-generative-ai",
+    },
+    "google-vertex": {
+        "baseUrl": "https://{location}-aiplatform.googleapis.com",
+        "api": "google-vertex",
+    },
     "xai": {
         "baseUrl": "https://api.x.ai/v1",
-        "api": "openai-completions",
+        "api": "openai-responses",
     },
 }
 KNOWN_MODEL_DEFAULTS: dict[tuple[str, str], dict[str, str]] = {
@@ -349,7 +359,13 @@ def synthesize_model_info(
         "effective_context_window_percent": 90,
         "experimental_supported_tools": [],
         "input_modalities": modalities,
-        "supports_search_tool": model.api in {"openai-completions", "openai-responses"},
+        "supports_search_tool": model.api
+        in {
+            "google-generative-ai",
+            "google-vertex",
+            "openai-completions",
+            "openai-responses",
+        },
         "use_responses_lite": False,
         "auto_review_model_override": None,
         "tool_mode": None,
@@ -374,6 +390,8 @@ def normalize_gpt_models(models: object) -> list[dict[str, Any]]:
         if not isinstance(slug, str) or not slug:
             continue
         item = dict(value)
+        if slug == "gpt-6.1-sol":
+            item["default_reasoning_level"] = "xhigh"
         if item.get("visibility") == "list":
             item["multi_agent_version"] = "v2"
         normalized.append(item)

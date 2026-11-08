@@ -314,7 +314,7 @@ name = "Sudhir Gateway"
 base_url = "{paths.gateway_url}/v1"
 wire_api = "responses"
 requires_openai_auth = true
-supports_websockets = false
+supports_websockets = {str(os.environ.get("SUDHIR_CODEX_WEBSOCKETS", "1") != "0").lower()}
 supports_standalone_web_search = true
 
 [model_providers.sudhir_gateway.env_http_headers]

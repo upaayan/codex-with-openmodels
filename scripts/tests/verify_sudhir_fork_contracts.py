@@ -154,12 +154,40 @@ def lint(path: Path, platform: str | None) -> dict[str, Any]:
                 raise ContractError(f"{row['id']}: source file is missing: {source}")
         _assert_test_resolves(row)
 
+    catalog_visibility = next(row for row in rows if row["id"] == "SC-CATALOG-002")
+    picker_method = "test_picker_first_page_preserves_visible_models_and_hidden_routes"
+    if (
+        "sudhir_codex/src/sudhir_codex_gateway/visibility.py"
+        not in catalog_visibility["source"]
+    ):
+        raise ContractError("SC-CATALOG-002: picker priority source mapping is missing")
+    _assert_test_resolves(
+        {
+            **catalog_visibility,
+            "test_file": "sudhir_codex/tests/test_app.py",
+            "test_name": f"GatewayAppTests.{picker_method}",
+        }
+    )
+    wrapper = (ROOT / catalog_visibility["test_file"]).read_text(encoding="utf-8")
+    targeted = (ROOT / "scripts/tests/sudhir_targeted_regressions.py").read_text(
+        encoding="utf-8"
+    )
+    if wrapper.count(f'"{picker_method}"') != 1:
+        raise ContractError(
+            "SC-CATALOG-002: picker regression wrapper membership is missing"
+        )
+    if targeted.count(f'"test_app.GatewayAppTests.{picker_method}"') != 1:
+        raise ContractError(
+            "SC-CATALOG-002: picker targeted regression membership is missing"
+        )
+
     source_workflow = SOURCE_WORKFLOW.read_text(encoding="utf-8")
     rust_workflow = RUST_WORKFLOW.read_text(encoding="utf-8")
     native_workflow = NATIVE_WORKFLOW.read_text(encoding="utf-8")
     required_source_commands = (
         "python scripts/tests/verify_sudhir_fork_contracts.py lint --platform linux",
         "python scripts/tests/run_sudhir_fork_contracts.py --platform linux --phase prebuild",
+        "python scripts/tests/sudhir_targeted_regressions.py gateway",
     )
     required_rust_commands = (
         "just test -p codex-tui picker_searches_merged_model_names_and_providers",

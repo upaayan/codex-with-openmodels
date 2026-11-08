@@ -6,6 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { Agent, Cursor, JsonlLocalAgentStore } from "@cursor/sdk";
+import { resolveSudhirCursorSettingSources } from "./setting-sources.mjs";
 
 const ROUTES = new Map([
   [
@@ -23,6 +24,22 @@ const ROUTES = new Map([
   [
     "cursor/composer-latest-slow",
     { alias: "composer-latest", fast: false },
+  ],
+  [
+    "cursor/grok-4.5-fast",
+    { alias: "grok-4.5", fast: true },
+  ],
+  [
+    "cursor/grok-4.5-slow",
+    { alias: "grok-4.5", fast: false },
+  ],
+  [
+    "cursor/grok-4.6-fast",
+    { alias: "grok-4.6", fast: true },
+  ],
+  [
+    "cursor/grok-4.6-slow",
+    { alias: "grok-4.6", fast: false },
   ],
 ]);
 const MODEL_CACHE_MS = 10 * 60 * 1000;
@@ -200,6 +217,7 @@ async function handleTurn(request) {
       typeof request.threadId === "string" && request.threadId
         ? ` ${request.threadId.slice(0, 12)}`
         : "";
+    const settingSources = resolveSudhirCursorSettingSources();
     agent = await Agent.create({
       apiKey,
       model: selection,
@@ -207,7 +225,7 @@ async function handleTurn(request) {
       name: `Sudhir-Codex${threadSuffix}`,
       local: {
         cwd: request.cwd,
-        settingSources: ["all"],
+        ...(settingSources ? { settingSources } : {}),
         store,
         enableAgentRetries: true,
       },

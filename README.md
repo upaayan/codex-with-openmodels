@@ -31,11 +31,14 @@ installation.
 - **Open-weight and other non-GPT models** use the user's own provider API
   keys. Model definitions and keys remain on the user's machine and are read
   from the local Pi model registry.
-- **Cursor Composer models** are optional and use the user's own Cursor
+- **Cursor models** are optional and use the user's own Cursor
   credential through the pinned Cursor SDK worker.
 
 The merged model picker allows a task to switch between these routes without
 replacing the official Codex installation.
+When a visibility policy is configured, enabled models precede hidden models
+in catalog priority order. This keeps up to 100 enabled models on the current
+desktop's first page while retaining hidden routes and their metadata.
 
 Open-weight model families with explicit route handling include:
 
@@ -52,6 +55,14 @@ Open-weight model families with explicit route handling include:
 Exact models depend on the user's local registry and the APIs available from
 their chosen providers. Compatible additional models can use the generic
 OpenAI Chat Completions, OpenAI Responses, or Anthropic Messages adapters.
+Native Gemini Developer API and Google Vertex routes use the gateway's Pi
+SDK pin (`@earendil-works/pi-coding-agent` `1.5.0`) and its `@google/genai`
+transport instead of those compatibility adapters. This SDK pin is separate
+from the standalone `pi` CLI. OAuth provider auth resolved through Pi can remove
+default auth headers with `null`; the gateway consumes those markers before HTTP.
+The Pi API
+label `google-generative-ai` is an internal discriminator; this project does
+not use the deprecated Python `google-generativeai` package.
 Model licences and provider terms vary.
 
 ## What is included
@@ -59,7 +70,7 @@ Model licences and provider terms vary.
 - The forked Rust CLI and app server.
 - A Python gateway that combines GPT and configured non-GPT routes.
 - A guarded `sudhir-codex` launcher with state separate from official Codex.
-- A pinned Node worker for four optional Cursor Composer routes.
+- A pinned Node worker for ten optional Cursor routes.
 - GitHub Actions definitions for native Apple Silicon macOS and Linux x64 MUSL
   backend release bundles.
 

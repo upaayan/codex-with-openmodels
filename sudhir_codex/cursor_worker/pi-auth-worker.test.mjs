@@ -6,6 +6,12 @@ import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import {
+  assistantToChatResponse,
+  chatRequestToPiContext,
+  completeWithUpstreamCapture,
+} from "./pi-auth-worker.mjs";
+
 const worker = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   "pi-auth-worker.mjs",
@@ -86,4 +92,195 @@ test("resolves an arbitrary OAuth provider through its Pi extension", async () =
     headers: {},
     baseUrl: null,
   });
+});
+
+test("preserves provider auth header deletions for the gateway", async () => {
+  const agentDir = await mkdtemp(path.join(os.tmpdir(), "sudhir-pi-headers-"));
+  await mkdir(path.join(agentDir, "extensions"), { recursive: true });
+  await writeFile(path.join(agentDir, "models.json"), JSON.stringify({ providers: {} }));
+  await writeFile(
+    path.join(agentDir, "auth.json"),
+    JSON.stringify({
+      "header-oauth": {
+        type: "oauth",
+        access: "extension-access",
+        refresh: "extension-refresh",
+        expires: 9_999_999_999_999,
+      },
+    }),
+    { mode: 0o600 },
+  );
+  await writeFile(
+    path.join(agentDir, "extensions", "header-oauth.js"),
+    `import { createProvider } from "@earendil-works/pi-ai";
+     export default function (pi) {
+       const unused = () => { throw new Error("inference is not used"); };
+       pi.registerProvider(createProvider({
+         id: "header-oauth",
+         baseUrl: "https://headers.example/v1",
+         models: [{
+           id: "header-model", name: "Header Model",
+           provider: "header-oauth", api: "openai-completions",
+           baseUrl: "https://headers.example/v1",
+           reasoning: false, input: ["text"], contextWindow: 4096, maxTokens: 128,
+           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+         }],
+         auth: { oauth: {
+           name: "Header OAuth",
+           login: async () => { throw new Error("login is not used"); },
+           refresh: async (credentials) => credentials,
+           toAuth: async (credentials) => ({
+             apiKey: credentials.access,
+             headers: { aUtHoRiZaTiOn: null, "X-Provider-Auth": "extension-value" }
+           })
+         } },
+         api: { stream: unused, streamSimple: unused }
+       }));
+     }\n`,
+  );
+  const request = {
+    id: "header-request",
+    provider: "header-oauth",
+    model: "header-model",
+    api: "openai-completions",
+  };
+  const result = spawnSync(process.execPath, [worker], {
+    cwd: agentDir,
+    env: { ...process.env, SUDHIR_PI_AGENT_DIR: agentDir },
+    input: `${JSON.stringify(request)}\n`,
+    encoding: "utf8",
+  });
+  const response = result.stdout.split("\n").filter(Boolean).map(JSON.parse)
+    .find((value) => value.id === request.id);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(response, {
+    ...request,
+    ok: true,
+    apiKey: "extension-access",
+    headers: { aUtHoRiZaTiOn: null, "X-Provider-Auth": "extension-value" },
+    baseUrl: null,
+  });
+});
+
+test("round-trips Google thought signatures on their original content blocks", () => {
+  const model = {
+    id: "gemini-3.7-flash",
+    provider: "google",
+    api: "google-generative-ai",
+  };
+  const assistant = {
+    role: "assistant",
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    content: [
+      {
+        type: "thinking",
+        thinking: "check tools",
+        thinkingSignature: "dGhpbmtpbmc=",
+      },
+      {
+        type: "toolCall",
+        id: "call-1",
+        name: "shell_command",
+        arguments: { command: "pwd" },
+        thoughtSignature: "dG9vbA==",
+      },
+      { type: "text", text: "done", textSignature: "dGV4dA==" },
+    ],
+    usage: {
+      input: 8,
+      output: 5,
+      cacheRead: 0,
+      cacheWrite: 0,
+      reasoning: 2,
+      totalTokens: 13,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "toolUse",
+    timestamp: 1,
+  };
+
+  const response = assistantToChatResponse(assistant);
+  const chatMessage = response.choices[0].message;
+  const context = chatRequestToPiContext(
+    {
+      messages: [
+        { role: "assistant", ...chatMessage },
+        { role: "tool", tool_call_id: "call-1", content: "ok" },
+      ],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "shell_command",
+            description: "Run a command",
+            parameters: { type: "object", properties: {} },
+          },
+        },
+      ],
+    },
+    model,
+  );
+
+  assert.deepEqual(context.messages[0].content, assistant.content);
+  assert.equal(context.messages[0].provider, model.provider);
+  assert.equal(context.messages[0].model, model.id);
+  assert.equal(context.messages[1].toolName, "shell_command");
+  assert.deepEqual(response.usage.completion_tokens_details, {
+    reasoning_tokens: 2,
+  });
+});
+
+test("captures native Google HTTP failures for gateway passthrough", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response('{"error":{"message":"quota exceeded"}}', {
+      status: 429,
+      headers: {
+        "content-type": "application/problem+json",
+        "x-request-id": "google-request-429",
+        "set-cookie": "must-not-cross-worker",
+      },
+    });
+  try {
+    const result = await completeWithUpstreamCapture(async () => {
+      await globalThis.fetch("https://generativelanguage.googleapis.com/test");
+      return { stopReason: "error" };
+    });
+    assert.deepEqual(result, {
+      message: { stopReason: "error" },
+      upstream: {
+        status: 429,
+        headers: {
+          "content-type": "application/problem+json",
+          "x-request-id": "google-request-429",
+        },
+        bodyBase64: Buffer.from(
+          '{"error":{"message":"quota exceeded"}}',
+        ).toString("base64"),
+      },
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("disables redirects for native Google fetches", async () => {
+  const originalFetch = globalThis.fetch;
+  let redirect;
+  globalThis.fetch = async (_input, init) => {
+    redirect = init?.redirect;
+    return new Response(null, { status: 302 });
+  };
+  try {
+    const result = await completeWithUpstreamCapture(async () => {
+      await globalThis.fetch("https://generativelanguage.googleapis.com/test");
+      return { stopReason: "error" };
+    });
+    assert.equal(redirect, "manual");
+    assert.equal(result.upstream.status, 302);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

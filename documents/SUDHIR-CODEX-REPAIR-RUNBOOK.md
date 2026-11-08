@@ -1,5 +1,12 @@
 # Sudhir-Codex Rapid Repair Runbook
 
+## Start here: the current notes are private
+
+The current pinned-frontend and 0.163 backend repair notes, including how to reverse
+them, are in `documents/FRONTEND-UPDATE.md` and `documents/BACKEND-MONTHLY-UPGRADE.md`.
+Read those first. Both are private: they are on the Mac only, not on GitHub. Earlier
+dated instructions below remain historical.
+
 **Audience:** Luna or another repair operator with local shell access
 
 **Applies to:** The small transition-launcher architecture
@@ -57,12 +64,16 @@ Active proxy:        ~/.playground/sudhir-codex/dist/codex-responses-api-proxy
 Known-good repair:   ~/.sudhir-codex/config-backups/trust-repair-20260820T035726Z
 rc.13 evidence:      ~/.playground/sudhir-codex/dist/release-evidence/openmodels-v0.1.0-rc.13
 Current rollback:    ~/.playground/sudhir-codex/dist/backups/pre-sudhir-0163-20261022-catalog
-Backup server:       ubuntu@$BACKUP_HOST (set BACKUP_HOST to the server's address first)
-Remote repair root:  /home/ubuntu/.sudhir-codex/config-backups
 ```
 
-Use absolute paths in repair commands. Do not use a broad recursive copy of
-`~/.sudhir-codex` to or from the backup server.
+Use absolute paths in repair commands. Do not make a broad recursive copy of
+`~/.sudhir-codex`.
+
+The Sudhir-Codex installs on the two Linux servers are retired: the backup
+server's on 26 September 2026 and the mock server's on 8 November 2026. Their
+gateways are stopped and their checkouts and state are deleted, so do not copy
+recovery points to them or run repairs there. Recovery points now exist only on
+the Mac.
 
 ## 2. Five-minute read-only triage
 
@@ -348,31 +359,12 @@ PY
 ( cd "$repair_dir" && /usr/bin/shasum -a 256 -c SHA256SUMS )
 ```
 
-### 4.6 Copy the recovery point to the backup server
+### 4.6 Second copy of the recovery point
 
-Use a never-overwrite remote directory. Replace the example stamp with the
-stamp from section 4.1.
-
-```bash
-remote_root=/home/ubuntu/.sudhir-codex/config-backups
-remote_name="trust-repair-${repair_stamp}"
-remote_dir="$remote_root/$remote_name"
-remote_incoming="$remote_root/.${remote_name}.incoming"
-ssh -o BatchMode=yes ubuntu@$BACKUP_HOST \
-  "test ! -e '$remote_dir' && test ! -e '$remote_incoming' && mkdir -m 700 -p '$remote_incoming'"
-rsync -a --partial "$repair_dir/" \
-  "ubuntu@$BACKUP_HOST:$remote_incoming/"
-ssh -o BatchMode=yes ubuntu@$BACKUP_HOST \
-  "find '$remote_incoming' -type f -exec chmod 600 {} + && cd '$remote_incoming' && sha256sum -c SHA256SUMS && mv '$remote_incoming' '$remote_dir'"
-```
-
-If transfer is interrupted, rerun only the `rsync` and final `ssh` commands;
-`--partial` resumes the incomplete copy. If the final remote directory already
-exists, stop rather than overwrite it.
-
-The currently verified local and remote set is
-`trust-repair-20260820T035726Z`; all four original files match byte-for-byte on
-both machines.
+Retired. Recovery points used to be copied to the backup server, but that
+install was removed on 26 September 2026 and the copies went with it, including
+the 20 August set. Recovery points now exist only on the Mac, in the folder from
+section 4.5.
 
 ## 5. Models are missing from the list
 
@@ -407,6 +399,41 @@ the catalog but excluded by visibility policy, repair only
 There is not yet a dedicated current-version backup of
 `model-visibility.json` in the 20 August trust-repair set. Do not use an old
 archived transition copy without owner approval.
+
+### 5.2 Enabled models fall beyond the desktop's first page
+
+The observed desktop sends `model/list` with `includeHidden: true`,
+`cursor: null`, `limit: 100`, then ignores `nextCursor`. Rust orders by priority
+and pages before the UI filters hidden entries. A `visibility: list` model can
+therefore be omitted even though the gateway and policy are correct. In the
+107-entry catalog observed on 4 October, the four Cursor Grok 4.6/4.7 routes
+occupied entries 104–107. Hiding other routes alone does not remove them from
+the page.
+
+The gateway's `apply_model_visibility` now places enabled entries first in
+priority order, preserving relative order in each visibility group and every
+route and inference metadata field. Both live and cached GPT sources receive
+this repair. Verify the focused upgrade checks, in section "Picker catalog pagination
+preservation" of the private `documents/BACKEND-MONTHLY-UPGRADE.md`,
+before accepting/restarting a replacement gateway. No Rust rebuild or official
+app modification is required.
+
+After authorized activation, use `sudhir-codex gateway stop`, then
+`sudhir-codex gateway start`, and require healthy `gateway status --json`.
+Refresh the backend catalog through a new session and inspect `model/list` with
+the same parameters. All enabled routes must be in `data` when at most 100 are
+enabled; `nextCursor` may still exist because hidden routes are retained. Check
+the existing private `models_cache.json` after refresh; do not delete the cache
+or replace private config to force it. After the backend's normal cache refresh,
+a new chat reloads the picker. Opening one alone does not force a gateway fetch;
+do not interrupt official ChatGPT to apply a gateway-only change.
+
+This compatibility repair cannot show more than 100 enabled entries on an
+unpaginated frontend. Report that limit and obtain an owner decision before
+changing visibility or implementing frontend pagination. Preserve the source,
+regression, contract and runner together. Exact evidence and task-only rollback
+are in the private record
+`documents/plan-audit-implementation/picker_catalog_pagination_implementation.md`.
 
 ## 6. Fresh new-task model selection snaps back to GPT
 
@@ -511,23 +538,8 @@ test ! -e "$backup"
 ( cd "$backup" && /usr/bin/shasum -a 256 -c SHA256SUMS )
 ```
 
-Copy it to a new server directory and verify it there before activation:
-
-```bash
-remote_root=/home/ubuntu/.sudhir-codex/backend-backups
-remote_name=pre-openmodels-v0.1.0-rc.13-20260820T130328Z
-remote="$remote_root/$remote_name"
-incoming="$remote_root/.${remote_name}.incoming"
-ssh -o BatchMode=yes ubuntu@$BACKUP_HOST \
-  "test ! -e '$remote' && test ! -e '$incoming' && mkdir -m 700 -p '$incoming'"
-rsync -a --partial "$backup/" "ubuntu@$BACKUP_HOST:$incoming/"
-ssh -o BatchMode=yes ubuntu@$BACKUP_HOST \
-  "find '$incoming' -type f -exec chmod 600 {} + && cd '$incoming' && sha256sum -c SHA256SUMS && mv '$incoming' '$remote'"
-```
-
-If transfer is interrupted, rerun only the `rsync` and final `ssh` commands;
-`--partial` resumes the incomplete copy. If the final server directory already
-exists, stop. Do not overwrite it.
+This procedure used to copy that backup to the backup server before activation.
+That step is retired (section 4.6), so the Mac copy above is the only one.
 
 ### 6.6 Activate atomically and restart the Sudhir instance
 
@@ -653,7 +665,8 @@ websocket setting, re-sign the custom core as a supposed substitute for OpenAI
 identity, weaken peer authorization, or patch the official app.
 
 Use the exact two repair tests, upgrade preservation unit and live acceptance
-steps in [FRONTEND-UPDATE.md](FRONTEND-UPDATE.md#urvashi-cloud-to-mac-launch-boundary--2026-10-01).
+steps in section "Urvashi cloud-to-Mac launch boundary" of the private
+`documents/FRONTEND-UPDATE.md`.
 Missing/non-executable official CLI stops launch before provisioning; investigate
 the installed app layout rather than silently selecting the custom executor.
 After an authorized gateway restart, a separately owner-directed desktop
@@ -704,7 +717,8 @@ during the app-server handshake, or in the gateway.
 
 For `Computer Use plugin has no recoverable instruction template for
 skills/computer-use/SKILL.md`, follow the
-[current template recovery procedure](FRONTEND-UPDATE.md#computer-use-instruction-recovery-and-preservation).
+current template recovery procedure, in section "Computer Use instruction recovery
+and preservation" of the private `documents/FRONTEND-UPDATE.md`.
 This is startup provisioning, before app-server/gateway launch; it does not by
 itself indicate a broken backend. The September cache lacked the skill and the
 new app-bundled overview lacked Bootstrap/API instructions; stable full
@@ -743,14 +757,15 @@ build.
 ### 9.2 Validate in this order
 
 1. Run the trust validator in section 2.4 and the five Computer Use upgrade
-   regressions plus safe primary sync in [FRONTEND-UPDATE.md](FRONTEND-UPDATE.md#checks-before-accepting-an-upgrade).
+   regressions plus safe primary sync in section "Checks before accepting an upgrade"
+   of the private `documents/FRONTEND-UPDATE.md`.
 2. Start Sudhir-Codex through the small launcher.
 3. Require `running`, `appServerRunning` and `controlRuntime.ready` to be true.
 4. Test a fresh non-GPT draft.
 5. Test a model change in an existing task.
 6. Test Browser/Computer Use only if the update changed those bundled resources
    or that capability is needed.
-7. If all pass, create a new recovery point and copy it to the backup server.
+7. If all pass, create a new recovery point.
 
 If the trust validator fails, use section 4. If only the fresh draft fails and
 no update request reaches app-server, use section 6.8. If build `6720` sends
@@ -803,7 +818,6 @@ Do not declare a repair complete until all items relevant to the symptom pass.
 - Transition status reports `controlRuntime.ready=true`.
 - The launcher log has no new `Missing required setting` failure.
 - The local recovery directory has a passing `SHA256SUMS`.
-- The remote recovery directory passes `sha256sum -c SHA256SUMS`.
 
 ### 10.2 Model repair/diagnosis
 
@@ -818,8 +832,10 @@ Do not declare a repair complete until all items relevant to the symptom pass.
 ### 10.3 `rc.13` Mac backend
 
 Historical check. `rc.13` is no longer the active backend, and its rollback
-folders no longer exist on the Mac or the backup server (checked 8 November 2026),
-so the two rollback checks below will fail.
+folder no longer exists on the Mac (checked 8 November 2026), so the rollback
+check below will fail. The backup server's copy went when that install was
+retired. For the current backend, see section "Current Mac release" of the
+private `documents/BACKEND-MONTHLY-UPGRADE.md`.
 
 ```bash
 /usr/bin/shasum -a 256 \
@@ -828,8 +844,6 @@ so the two rollback checks below will fail.
   /Users/sudhirjha/.playground/sudhir-codex/dist/codex-responses-api-proxy
 ( cd /Users/sudhirjha/.playground/sudhir-codex/dist/backups/pre-openmodels-v0.1.0-rc.13-20260820T130328Z && \
   /usr/bin/shasum -a 256 -c SHA256SUMS )
-ssh -o BatchMode=yes ubuntu@$BACKUP_HOST \
-  "cd /home/ubuntu/.sudhir-codex/backend-backups/pre-openmodels-v0.1.0-rc.13-20260820T130328Z && sha256sum -c SHA256SUMS"
 ```
 
 Expected active hashes, in order:
@@ -853,9 +867,8 @@ Give a concise report containing:
 4. files changed, if any;
 5. pre-repair and repaired hashes;
 6. local backup path;
-7. remote backup path and checksum result;
-8. final runtime and GUI validation results;
-9. anything still unresolved.
+7. final runtime and GUI validation results;
+8. anything still unresolved.
 
 Never say a frontend problem is fixed merely because config validation passed.
 Never say the installation is healthy merely because the launcher opened. Test

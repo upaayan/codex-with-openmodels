@@ -1,9 +1,11 @@
+import base64
 import concurrent.futures
 import json
 import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import httpx
 
@@ -11,18 +13,31 @@ from helpers import basic_pi_document
 from helpers import make_repo
 from helpers import write_json
 from sudhir_codex_gateway.app import BufferedResponse
-from sudhir_codex_gateway.app import CHATGPT_CLIENT_VERSION
+from sudhir_codex_gateway.catalog_version import CatalogVersion
+
 from sudhir_codex_gateway.app import GATEWAY_TOKEN_HEADER
 from sudhir_codex_gateway.app import GatewayApp
 from sudhir_codex_gateway.app import GatewaySettings
 from sudhir_codex_gateway.app import StreamingResponse
+from sudhir_codex_gateway.cursor_prompt import estimate_prompt_tokens
+from sudhir_codex_gateway.cursor_catalog import CURSOR_MODEL_ROUTES
 from sudhir_codex_gateway.cursor_worker import CursorTurnResult
 from sudhir_codex_gateway.errors import GatewayError
+from sudhir_codex_gateway.credentials import ResolvedRequestAuth
 from sudhir_codex_gateway.pi_auth_worker import PiAuthResult
+from sudhir_codex_gateway.pi_auth_worker import PiInferenceHTTPError
+from sudhir_codex_gateway.pi_auth_worker import PiInferenceResult
+from sudhir_codex_gateway.visibility import apply_model_visibility
+
+
+CHATGPT_CLIENT_VERSION = "0.153.4"
 
 
 class GatewayAppTests(unittest.TestCase):
     def setUp(self) -> None:
+        version_patch = patch("sudhir_codex_gateway.app.resolve_catalog_version", return_value=CatalogVersion(CHATGPT_CLIENT_VERSION, CHATGPT_CLIENT_VERSION, None, None))
+        version_patch.start()
+        self.addCleanup(version_patch.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.repo = make_repo(self.root / "repo")
@@ -65,8 +80,93 @@ class GatewayAppTests(unittest.TestCase):
                 "service": "sudhir-codex-gateway",
                 "instance_id": self.settings.instance_id,
                 "pid": os.getpid(),
+                "catalog_version": CatalogVersion(CHATGPT_CLIENT_VERSION, CHATGPT_CLIENT_VERSION, None, None).document(),
             },
         )
+
+    def test_dsh_gpt_auth_uses_pi_for_catalog_and_response(self) -> None:
+        claims = base64.urlsafe_b64encode(json.dumps({
+            "https://api.openai.com/auth": {"chatgpt_account_id": "pi-account"}
+        }).encode()).decode().rstrip("=")
+        access = f"fixture.{claims}.signature"
+        write_json(self.pi / "auth.json", {"openai-codex": {"type": "oauth"}})
+
+        class Worker:
+            def __init__(self):
+                self.calls = []
+
+            def resolve(self, model):
+                self.calls.append((model.provider_id, model.upstream_id, model.api))
+                return PiAuthResult(model.provider_id, model.upstream_id, model.api, access, {}, None)
+
+            def close(self):
+                pass
+
+        for incoming in (
+            {"Authorization": "Bearer gateway-secret", "ChatGPT-Account-Id": "wrong-account"},
+            {GATEWAY_TOKEN_HEADER: "gateway-secret"},
+        ):
+            with self.subTest(incoming_keys=list(incoming)):
+                observed = []
+
+                def handler(request):
+                    observed.append((request.method, dict(request.headers)))
+                    if request.method == "GET":
+                        return httpx.Response(200, json={"models": [{"slug": "gpt-test", "visibility": "list"}]})
+                    self.assertEqual(json.loads(request.content), {"model": "gpt-test", "input": [], "stream": True})
+                    return httpx.Response(200, content=b"data: {}\n\n")
+
+                worker = Worker()
+                app = GatewayApp(self.settings, http_client=httpx.Client(transport=httpx.MockTransport(handler)), pi_auth_worker=worker)
+                try:
+                    response = app.responses(incoming, b'{"model":"gpt-test","input":[],"stream":true,"max_output_tokens":4096}')
+                    response.response.close()
+                finally:
+                    app.close()
+                self.assertEqual(worker.calls, [
+                    ("openai-codex", "gpt-5.5", "openai-codex-responses"),
+                    ("openai-codex", "gpt-test", "openai-codex-responses"),
+                ])
+                self.assertEqual([method for method, _ in observed], ["GET", "POST"])
+                for _, headers in observed:
+                    self.assertEqual(headers["authorization"], "Bearer " + access)
+                    self.assertEqual(headers["chatgpt-account-id"], "pi-account")
+                    self.assertNotIn(GATEWAY_TOKEN_HEADER.lower(), headers)
+                    self.assertNotIn("gateway-secret", str(headers))
+                audit = self.settings.route_audit_path.read_text()
+                self.assertNotIn(access, audit)
+                self.assertNotIn("pi-account", audit)
+
+    def test_native_gpt_body_is_not_rewritten_for_dsh_compatibility(self) -> None:
+        body = {"model": "gpt-test", "input": [], "stream": True, "max_output_tokens": 4096}
+        observed = []
+        def handler(request):
+            observed.append(json.loads(request.content))
+            return httpx.Response(200, content=b"data: {}\n\n")
+        app = GatewayApp(self.settings, http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+        app._gpt_model_ids = frozenset({"gpt-test"})
+        try:
+            response = app.responses({"Authorization": "Bearer native-fixture", GATEWAY_TOKEN_HEADER: "gateway-secret"}, json.dumps(body).encode())
+            response.response.close()
+        finally:
+            app.close()
+        self.assertEqual(observed, [body])
+
+    def test_dsh_shared_auth_failure_does_not_forward_gateway_token(self) -> None:
+        app = GatewayApp(self.settings, http_client=httpx.Client(transport=httpx.MockTransport(
+            lambda _request: self.fail("Invalid shared auth reached upstream")
+        )))
+        app._gpt_model_ids = frozenset({"gpt-test"})
+        try:
+            with self.assertRaises(GatewayError) as missing:
+                app.responses({"Authorization": "Bearer gateway-secret"}, b'{"model":"gpt-test"}')
+            self.assertEqual(missing.exception.code, "pi_credential_missing")
+            with patch.object(app.credentials, "resolve", return_value=ResolvedRequestAuth({"Authorization": "Bearer invalid-fixture"})):
+                with self.assertRaises(GatewayError) as invalid:
+                    app.responses({"Authorization": "Bearer gateway-secret"}, b'{"model":"gpt-test"}')
+                self.assertEqual(invalid.exception.code, "pi_codex_auth_invalid")
+        finally:
+            app.close()
 
     def test_pi_request_receives_only_pi_credential(self) -> None:
         observed: dict[str, object] = {}
@@ -281,6 +381,21 @@ class GatewayAppTests(unittest.TestCase):
         )
         self.assertEqual(worker.calls[0]["cwd"], self.root)
         self.assertEqual(worker.calls[0]["thread_id"], "thread-cursor")
+        prompt = worker.calls[0]["prompt"]
+        self.assertIsInstance(prompt, str)
+        expected_input = estimate_prompt_tokens(prompt)
+        self.assertGreater(expected_input, 0)
+        self.assertNotEqual(expected_input, 11)
+        completed = next(
+            event
+            for line in response.body.decode().splitlines()
+            if line.startswith("data: ")
+            for event in [json.loads(line.removeprefix("data: "))]
+            if event.get("type") == "response.completed"
+        )
+        usage = completed["response"]["usage"]
+        self.assertEqual(usage["input_tokens"], expected_input)
+        self.assertEqual(usage["output_tokens"], 5)
         self.assertTrue(worker.closed)
 
         audit = self.settings.route_audit_path.read_text(encoding="utf-8")
@@ -422,7 +537,179 @@ class GatewayAppTests(unittest.TestCase):
         self.assertNotIn("reasoning_effort", observed["body"])
         self.assertIn(b"Messages replied", response.body)
 
+    def test_native_google_routes_use_pi_runtime_instead_of_http_adapter(self) -> None:
+        write_json(
+            self.pi / "models.json",
+            {
+                "providers": {
+                    "google": {
+                        "api": "google-generative-ai",
+                        "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+                        "models": [
+                            {"id": "gemini-3.7-flash", "reasoning": True}
+                        ],
+                    },
+                    "google-vertex": {
+                        "models": [
+                            {"id": "gemini-3.7-flash", "reasoning": True}
+                        ]
+                    },
+                }
+            },
+        )
+
+        class FakePiRuntime:
+            def __init__(self) -> None:
+                self.calls: list[tuple[object, object, object]] = []
+                self.closed = False
+
+            def infer(self, model, chat_request, reasoning):
+                self.calls.append((model, chat_request, reasoning))
+                return PiInferenceResult(
+                    provider_id=model.provider_id,
+                    model_id=model.upstream_id,
+                    api=model.api,
+                    destination=(
+                        "aiplatform.googleapis.com"
+                        if model.api == "google-vertex"
+                        else "generativelanguage.googleapis.com"
+                    ),
+                    response={
+                        "choices": [
+                            {
+                                "message": {
+                                    "role": "assistant",
+                                    "content": f"{model.provider_id} replied",
+                                }
+                            }
+                        ],
+                        "usage": {
+                            "prompt_tokens": 4,
+                            "completion_tokens": 2,
+                            "total_tokens": 6,
+                        },
+                    },
+                )
+
+            def close(self) -> None:
+                self.closed = True
+
+        worker = FakePiRuntime()
+        app = GatewayApp(
+            self.settings,
+            http_client=httpx.Client(
+                transport=httpx.MockTransport(
+                    lambda _request: self.fail(
+                        "Native Google route used the HTTP compatibility adapter"
+                    )
+                )
+            ),
+            pi_auth_worker=worker,
+        )
+        try:
+            for provider in ("google", "google-vertex"):
+                response = app.responses(
+                    {GATEWAY_TOKEN_HEADER: "gateway-secret"},
+                    json.dumps(
+                        {
+                            "model": f"pi-{provider}/gemini-3.7-flash",
+                            "instructions": "Be concise",
+                            "input": [
+                                {
+                                    "type": "message",
+                                    "role": "user",
+                                    "content": [
+                                        {"type": "input_text", "text": "hello"}
+                                    ],
+                                }
+                            ],
+                            "reasoning": {"effort": "high"},
+                            "stream": True,
+                        }
+                    ).encode(),
+                )
+                self.assertIsInstance(response, BufferedResponse)
+                self.assertIn(f"{provider} replied".encode(), response.body)
+        finally:
+            app.close()
+
+        self.assertEqual(
+            [(call[0].provider_id, call[2]) for call in worker.calls],
+            [("google", "high"), ("google-vertex", "high")],
+        )
+        self.assertEqual(worker.calls[0][1]["messages"][0]["role"], "system")
+        self.assertTrue(worker.closed)
+        audit = self.settings.route_audit_path.read_text(encoding="utf-8")
+        self.assertIn('"provider_id":"google"', audit)
+        self.assertIn('"provider_id":"google-vertex"', audit)
+
+    def test_native_google_error_preserves_upstream_response(self) -> None:
+        write_json(
+            self.pi / "models.json",
+            {
+                "providers": {
+                    "google": {
+                        "api": "google-generative-ai",
+                        "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+                        "models": [{"id": "gemini-3.7-flash"}],
+                    }
+                }
+            },
+        )
+
+        class FailingPiRuntime:
+            def infer(self, _model, _chat_request, _reasoning):
+                raise PiInferenceHTTPError(
+                    429,
+                    {
+                        "content-type": "application/problem+json",
+                        "x-request-id": "google-request-429",
+                    },
+                    b'{"error":{"message":"quota exceeded"}}',
+                )
+
+            def close(self) -> None:
+                return
+
+        app = GatewayApp(self.settings, pi_auth_worker=FailingPiRuntime())
+        try:
+            response = app.responses(
+                {GATEWAY_TOKEN_HEADER: "gateway-secret"},
+                json.dumps(
+                    {
+                        "model": "pi-google/gemini-3.7-flash",
+                        "input": [
+                            {
+                                "type": "message",
+                                "role": "user",
+                                "content": [{"type": "input_text", "text": "hello"}],
+                            }
+                        ],
+                    }
+                ).encode(),
+            )
+        finally:
+            app.close()
+
+        self.assertEqual(
+            response,
+            BufferedResponse(
+                status=429,
+                headers={
+                    "content-type": "application/problem+json",
+                    "x-request-id": "google-request-429",
+                },
+                body=b'{"error":{"message":"quota exceeded"}}',
+            ),
+        )
+
     def test_xai_grok45_uses_responses_transport(self) -> None:
+        self._assert_xai_responses_transport("grok-4.5")
+
+    def test_xai_grok43_uses_responses_transport(self) -> None:
+        self._assert_xai_responses_transport("grok-4.3")
+
+    def _assert_xai_responses_transport(self, model_id: str) -> None:
         write_json(
             self.pi / "models.json",
             {
@@ -430,7 +717,7 @@ class GatewayAppTests(unittest.TestCase):
                     "xai": {
                         "models": [
                             {
-                                "id": "grok-4.5",
+                                "id": model_id,
                                 "reasoning": True,
                                 "input": ["text", "image"],
                                 "contextWindow": 500_000,
@@ -464,7 +751,7 @@ class GatewayAppTests(unittest.TestCase):
                     json={
                         "id": "resp_xai",
                         "status": "completed",
-                        "model": "grok-4.5",
+                        "model": model_id,
                         "output": [
                             {
                                 "type": "reasoning",
@@ -512,7 +799,7 @@ class GatewayAppTests(unittest.TestCase):
             def resolve(self, _model):
                 return PiAuthResult(
                     provider_id="xai",
-                    model_id="grok-4.5",
+                    model_id=model_id,
                     api="openai-responses",
                     api_key="xai-secret",
                     headers={},
@@ -532,7 +819,7 @@ class GatewayAppTests(unittest.TestCase):
                 {GATEWAY_TOKEN_HEADER: "gateway-secret"},
                 json.dumps(
                     {
-                        "model": "pi-xai/grok-4.5",
+                        "model": f"pi-xai/{model_id}",
                         "instructions": "Be concise",
                         "input": [
                             {
@@ -552,7 +839,7 @@ class GatewayAppTests(unittest.TestCase):
         self.assertIsInstance(response, BufferedResponse)
         self.assertEqual(observed["url"], "https://api.x.ai/v1/responses")
         self.assertEqual(observed["authorization"], "Bearer xai-secret")
-        self.assertEqual(observed["body"]["model"], "grok-4.5")
+        self.assertEqual(observed["body"]["model"], model_id)
         self.assertEqual(observed["body"]["stream"], False)
         self.assertEqual(observed["body"]["store"], False)
         self.assertEqual(
@@ -699,7 +986,7 @@ class GatewayAppTests(unittest.TestCase):
                             openai_reasoning,
                             {
                                 "type": "reasoning",
-                                "id": "foreign-reasoning",
+                                "id": "foreign-plaintext-reasoning",
                                 "summary": [],
                                 "content": [
                                     {
@@ -708,6 +995,21 @@ class GatewayAppTests(unittest.TestCase):
                                     }
                                 ],
                                 "encrypted_content": None,
+                            },
+                            {
+                                "type": "reasoning",
+                                "id": "foreign-route-scoped-reasoning",
+                                "summary": [],
+                                "content": [
+                                    {
+                                        "type": "reasoning_text",
+                                        "text": "DeepSeek private reasoning",
+                                    }
+                                ],
+                                "encrypted_content": (
+                                    "sudhir-codex-route-v1.853f10f9207f80235ec0b1d6."
+                                    "fbd0a62b-c79e-4ee6-8fd3-47371f11223f-0"
+                                ),
                             },
                             assistant_message,
                         ],
@@ -1137,6 +1439,12 @@ class GatewayAppTests(unittest.TestCase):
                 "cursor/composer-2.5-slow",
                 "cursor/composer-latest-fast",
                 "cursor/composer-latest-slow",
+                "cursor/grok-4.5-fast",
+                "cursor/grok-4.5-slow",
+                "cursor/grok-4.6-fast",
+                "cursor/grok-4.6-slow",
+                "cursor/grok-4.7-fast",
+                "cursor/grok-4.7-slow",
             },
         )
         self.assertEqual(by_id["gpt-test"]["multi_agent_version"], "v2")
@@ -1150,6 +1458,96 @@ class GatewayAppTests(unittest.TestCase):
         )
         self.assertEqual(response.headers["X-Sudhir-GPT-Catalog"], "live")
         self.assertIn("ETag", response.headers)
+
+    def test_picker_first_page_preserves_visible_models_and_hidden_routes(self) -> None:
+        upstream = [
+            {"slug": "gpt-visible", "visibility": "list", "priority": 0},
+            *[
+                {
+                    "slug": f"gpt-hidden-{index}",
+                    "visibility": "list",
+                    "priority": index + 1,
+                    "context_window": 272_000,
+                }
+                for index in range(125)
+            ],
+        ]
+        write_json(
+            self.settings.model_visibility_path,
+            {
+                "default": "hide",
+                "show": [
+                    "gpt-visible",
+                    "pi-demo/demo/model",
+                    "cursor/grok-4.6-*",
+                    "cursor/grok-4.7-*",
+                ],
+            },
+        )
+        expected = [
+            "gpt-visible",
+            "pi-demo/demo/model",
+            "cursor/grok-4.6-fast",
+            "cursor/grok-4.6-slow",
+            "cursor/grok-4.7-fast",
+            "cursor/grok-4.7-slow",
+        ]
+        live = True
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return (
+                httpx.Response(200, json={"models": upstream})
+                if live
+                else httpx.Response(503)
+            )
+
+        app = GatewayApp(
+            self.settings,
+            http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        try:
+            for source in ("live", "cache"):
+                with self.subTest(source=source):
+                    live = source == "live"
+                    response = app.list_models(
+                        {"Authorization": "Bearer fixture-auth"}, ""
+                    )
+                    self.assertEqual(response.headers["X-Sudhir-GPT-Catalog"], source)
+                    models = json.loads(response.body)["models"]
+                    # The desktop asks for 100 entries including hidden models,
+                    # ignores nextCursor, then filters its page by visibility.
+                    first_page = sorted(models, key=lambda model: model["priority"])[:100]
+                    self.assertEqual(
+                        [model["slug"] for model in first_page if model["visibility"] == "list"],
+                        expected,
+                    )
+                    by_id = {model["slug"]: model for model in models}
+                    self.assertEqual(len(by_id), len(models))
+                    self.assertEqual(
+                        set(by_id),
+                        {model["slug"] for model in upstream}
+                        | {"pi-demo/demo/model"}
+                        | {route.gateway_id for route in CURSOR_MODEL_ROUTES},
+                    )
+                    for original in upstream:
+                        actual = by_id[original["slug"]]
+                        for key, value in original.items():
+                            if key not in {"visibility", "priority"}:
+                                self.assertEqual(actual[key], value)
+                    self.assertEqual(by_id["gpt-hidden-124"]["visibility"], "hide")
+                    self.assertEqual(
+                        [model["slug"] for model in models if model["slug"].startswith("gpt-hidden-")],
+                        [model["slug"] for model in upstream[1:]],
+                    )
+                    before_reapply = json.dumps(models, sort_keys=True)
+                    reapplied = apply_model_visibility(
+                        {"models": models}, self.settings.model_visibility_path
+                    )
+                    self.assertEqual(
+                        json.dumps(reapplied["models"], sort_keys=True), before_reapply
+                    )
+        finally:
+            app.close()
 
     def test_concurrent_live_catalog_writes_leave_valid_cache(self) -> None:
         def handler(_request: httpx.Request) -> httpx.Response:
@@ -1208,3 +1606,90 @@ class GatewayAppTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CatalogVersionTests(unittest.TestCase):
+    def test_detect_override_clear_and_failure(self):
+        import subprocess
+        from sudhir_codex_gateway.catalog_version import resolve_catalog_version, set_catalog_version_override
+        from sudhir_codex_gateway.platform_support import core_binary_name
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            state = root / "state"
+            state.mkdir()
+            with patch("sudhir_codex_gateway.catalog_version.subprocess.run") as run:
+                run.return_value.stdout = "codex-cli 0.153.4\n"
+                result = resolve_catalog_version(root, state)
+                self.assertEqual(result, CatalogVersion("0.153.4", "0.153.4", None, None))
+                self.assertEqual(run.call_args.args[0], [str(root / "dist" / core_binary_name()), "--version"])
+                self.assertEqual(run.call_args.kwargs["env"]["CODEX_HOME"], str(state))
+                set_catalog_version_override(state, "0.153.2")
+                self.assertEqual(resolve_catalog_version(root, state), CatalogVersion("0.153.4", "0.153.2", "0.153.2", None))
+                run.side_effect = subprocess.TimeoutExpired("core", 5)
+                result = resolve_catalog_version(root, state)
+                self.assertIsNone(result.actual)
+                self.assertEqual(result.effective, "0.153.2")
+                self.assertTrue(result.detection_error)
+                set_catalog_version_override(state, None)
+                self.assertIsNone(resolve_catalog_version(root, state).effective)
+                run.side_effect = None
+                run.return_value.stdout = "codex-cli 0.148.0-alpha.7\n"
+                self.assertEqual(resolve_catalog_version(root, state).effective, "0.148.0-alpha.7")
+                run.return_value.stdout = "unexpected output"
+                self.assertIsNone(resolve_catalog_version(root, state).effective)
+                with self.assertRaises(GatewayError):
+                    set_catalog_version_override(state, "bad version")
+
+    def test_catalog_routes_use_startup_version_and_failure_keeps_pi(self):
+        from sudhir_codex_gateway.catalog_version import set_catalog_version_override
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = make_repo(root / "repo")
+            state = root / "state"
+            state.mkdir()
+            pi = root / "pi"
+            write_json(pi / "models.json", basic_pi_document())
+            settings = GatewaySettings(repo, state, pi, "test-token")
+            versions = []
+            def handler(request):
+                versions.append(request.url.params["client_version"])
+                return httpx.Response(200, json={"models": [{"slug": "gpt-6-astra", "display_name": "Astra"}]})
+            for override, expected in [(None, "0.153.4"), ("0.153.2", "0.153.2"), (None, "0.153.4")]:
+                set_catalog_version_override(state, override)
+                with patch("sudhir_codex_gateway.catalog_version.subprocess.run") as run:
+                    run.return_value.stdout = "codex-cli 0.153.4\n"
+                    app = GatewayApp(settings, http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+                    try:
+                        response = app.list_models({}, "client_version=0.0.0")
+                        self.assertEqual(response.headers["X-Sudhir-GPT-Catalog"], "live")
+                        self.assertIn("gpt-6-astra", {m["slug"] for m in json.loads(response.body)["models"]})
+                        self.assertEqual(versions[-1], expected)
+                        app.list_models({}, "")
+                        self.assertEqual(run.call_count, 1)
+                    finally:
+                        app.close()
+            with patch("sudhir_codex_gateway.catalog_version.subprocess.run", side_effect=FileNotFoundError):
+                app = GatewayApp(settings, http_client=httpx.Client(transport=httpx.MockTransport(lambda r: self.fail("must not guess version"))))
+                try:
+                    self.assertEqual(app.list_models({}, "").headers["X-Sudhir-GPT-Catalog"], "cache")
+                    settings.gpt_cache_path.unlink()
+                    response = app.list_models({}, "")
+                    self.assertEqual(response.headers["X-Sudhir-GPT-Catalog"], "unavailable")
+                    self.assertTrue(any(m["slug"].startswith("pi-") for m in json.loads(response.body)["models"]))
+                    self.assertEqual(app.health().status, 200)
+                finally:
+                    app.close()
+
+    def test_management_catalog_defers_version_to_gateway(self):
+        from sudhir_codex_gateway.management import list_models
+        from sudhir_codex_gateway.state import RuntimePaths
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            paths = RuntimePaths(root, root / "state", root / "pi")
+            paths.token_file.parent.mkdir(parents=True)
+            paths.token_file.write_text("test-token")
+            with patch("sudhir_codex_gateway.management.start_gateway"), patch("sudhir_codex_gateway.management._private_chatgpt_headers", return_value={}), patch("sudhir_codex_gateway.management.httpx.get") as get:
+                get.return_value = httpx.Response(200, json={"models": [{"slug": "gpt-6-astra"}]}, headers={"X-Sudhir-GPT-Catalog": "live"})
+                models, source = list_models(paths)
+                self.assertEqual((models[0]["id"], source), ("gpt-6-astra", "live"))
+                self.assertNotIn("params", get.call_args.kwargs)

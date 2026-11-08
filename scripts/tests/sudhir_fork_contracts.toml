@@ -49,7 +49,7 @@ always = false
 id = "SC-GATEWAY-003"
 behavior = "Pi-provider HTTP errors preserve upstream status, body, content type, and request IDs instead of becoming a generic gateway 502"
 patch = "fix(gateway)"
-source = ["sudhir_codex/src/sudhir_codex_gateway/app.py"]
+source = ["sudhir_codex/src/sudhir_codex_gateway/app.py", "sudhir_codex/src/sudhir_codex_gateway/pi_auth_worker.py", "sudhir_codex/cursor_worker/pi-auth-worker.mjs"]
 test_file = "sudhir_codex/tests/test_app.py"
 test_runner = "python-unittest"
 test_name = "test_app.GatewayAppTests.test_pi_provider_error_preserves_status_body_and_request_id"
@@ -92,9 +92,9 @@ always = false
 
 [[contract]]
 id = "SC-CATALOG-001"
-behavior = "GPT and open-model catalogs merge with collision-free model IDs"
+behavior = "GPT and open-model catalogs merge with collision-free model IDs, including native Pi Google and Google Vertex routes"
 patch = "fork[catalog]"
-source = ["sudhir_codex/src/sudhir_codex_gateway/catalog.py", "sudhir_codex/src/sudhir_codex_gateway/cursor_catalog.py", "sudhir_codex/src/sudhir_codex_gateway/app.py"]
+source = ["sudhir_codex/src/sudhir_codex_gateway/catalog.py", "sudhir_codex/src/sudhir_codex_gateway/cursor_catalog.py", "sudhir_codex/src/sudhir_codex_gateway/app.py", "sudhir_codex/src/sudhir_codex_gateway/pi_auth_worker.py"]
 test_file = "sudhir_codex/tests/contracts/test_catalog.py"
 test_runner = "python-unittest"
 test_name = "CatalogContracts.test_merged_catalog_has_unique_gpt_pi_and_cursor_ids"
@@ -107,9 +107,9 @@ always = false
 
 [[contract]]
 id = "SC-CATALOG-002"
-behavior = "The model visibility policy controls picker and agent visibility"
+behavior = "The model visibility policy places enabled models before hidden models in priority order so the desktop's first 100 entries include enabled routes, while preserving the full catalog on live and cached responses"
 patch = "fork[catalog]"
-source = ["sudhir_codex/src/sudhir_codex_gateway/visibility.py", "sudhir_codex/src/sudhir_codex_gateway/catalog.py"]
+source = ["sudhir_codex/src/sudhir_codex_gateway/visibility.py", "sudhir_codex/src/sudhir_codex_gateway/catalog.py", "sudhir_codex/src/sudhir_codex_gateway/app.py"]
 test_file = "sudhir_codex/tests/contracts/test_catalog.py"
 test_runner = "python-unittest"
 test_name = "CatalogContracts.test_visibility_policy_controls_picker_and_agent_metadata"
@@ -118,7 +118,7 @@ acceptance_mode = "ci"
 acceptance_hosts = ["github-linux"]
 lane = "gateway"
 platforms = ["linux"]
-always = false
+always = true
 
 [[contract]]
 id = "SC-CREDENTIALS-001"
@@ -182,9 +182,9 @@ always = false
 
 [[contract]]
 id = "SC-REASONING-004"
-behavior = "Native encrypted reasoning is replayed only to the exact provider/model/API/base-URL route that created it"
+behavior = "Native encrypted reasoning and Google thought signatures are replayed only to the exact provider and model route that created them"
 patch = "fork[reasoning]"
-source = ["sudhir_codex/src/sudhir_codex_gateway/openai_responses.py"]
+source = ["sudhir_codex/src/sudhir_codex_gateway/openai_responses.py", "sudhir_codex/src/sudhir_codex_gateway/adapter.py", "sudhir_codex/cursor_worker/pi-auth-worker.mjs"]
 test_file = "sudhir_codex/tests/contracts/test_reasoning.py"
 test_runner = "python-unittest"
 test_name = "ReasoningContracts.test_encrypted_reasoning_is_route_scoped"
@@ -287,7 +287,7 @@ always = false
 
 [[contract]]
 id = "SC-OAUTH-001"
-behavior = "Python delegates any Pi-registered OAuth provider without xAI or xai2 allowlists or hand-written refresh code"
+behavior = "Python delegates any Pi-registered OAuth provider and applies case-insensitive null header deletions before HTTP without provider allowlists or hand-written refresh code"
 patch = "fork[oauth]"
 source = ["sudhir_codex/src/sudhir_codex_gateway/credentials.py", "sudhir_codex/src/sudhir_codex_gateway/pi_auth_worker.py"]
 test_file = "sudhir_codex/tests/contracts/test_oauth.py"
@@ -302,9 +302,9 @@ always = false
 
 [[contract]]
 id = "SC-OAUTH-WORKER-001"
-behavior = "The pinned Node worker resolves an arbitrary OAuth provider through its ordinary Pi extension"
+behavior = "The pinned Node worker preserves string/null Pi auth headers and native Google thought signatures across tool loops"
 patch = "fork[oauth]"
-source = ["sudhir_codex/cursor_worker/pi-auth-worker.mjs"]
+source = ["sudhir_codex/cursor_worker/pi-auth-worker.mjs", "sudhir_codex/cursor_worker/package.json", "sudhir_codex/cursor_worker/package-lock.json"]
 test_file = "sudhir_codex/cursor_worker/pi-auth-worker.test.mjs"
 test_runner = "node-test"
 test_name = "resolves an arbitrary OAuth provider through its Pi extension"
@@ -317,9 +317,9 @@ always = false
 
 [[contract]]
 id = "SC-XAI-001"
-behavior = "xAI Responses routes use the Responses transport and normal provider-scoped reasoning replay"
+behavior = "xAI routes inherit the pinned Pi Responses default and retain explicit API overrides and provider-scoped reasoning replay"
 patch = "fork[oauth]"
-source = ["sudhir_codex/src/sudhir_codex_gateway/app.py", "sudhir_codex/src/sudhir_codex_gateway/openai_responses.py"]
+source = ["sudhir_codex/src/sudhir_codex_gateway/app.py", "sudhir_codex/src/sudhir_codex_gateway/openai_responses.py", "sudhir_codex/src/sudhir_codex_gateway/catalog.py"]
 test_file = "sudhir_codex/tests/contracts/test_oauth.py"
 test_runner = "python-unittest"
 test_name = "OAuthContracts.test_xai_route_uses_responses_without_hardcoding"

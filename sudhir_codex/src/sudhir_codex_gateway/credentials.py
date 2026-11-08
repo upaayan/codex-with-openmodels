@@ -185,7 +185,7 @@ def _default_headers(model: OpenModel, key: str | None) -> dict[str, str]:
 
 def _merge_auth_headers(
     defaults: dict[str, str],
-    configured: dict[str, str],
+    configured: dict[str, str | None],
 ) -> dict[str, str]:
     merged = dict(defaults)
     for name, value in configured.items():
@@ -195,7 +195,8 @@ def _merge_auth_headers(
         for existing in list(merged):
             if existing.lower() == lower_name:
                 del merged[existing]
-        merged[name] = value
+        if value is not None:
+            merged[name] = value
     return merged
 
 

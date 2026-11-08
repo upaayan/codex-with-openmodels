@@ -118,14 +118,14 @@ def _management_command(argv: list[str]) -> list[str] | None:
             raise GatewayError(
                 64,
                 "gateway_command_missing",
-                "Use gateway start, stop, status, or rotate-token",
+                "Use gateway start, stop, status, rotate-token, or catalog-version",
             )
         command = argv[1]
-        if command not in {"start", "stop", "status", "rotate-token"}:
+        if command not in {"start", "stop", "status", "rotate-token", "catalog-version"}:
             raise GatewayError(
                 64,
                 "gateway_command_invalid",
-                "Use gateway start, stop, status, or rotate-token",
+                "Use gateway start, stop, status, rotate-token, or catalog-version",
             )
         return [command, *argv[2:]]
     if argv[:2] == ["uninstall", "--state"]:
@@ -242,7 +242,7 @@ def _forced_config(gateway_url: str) -> list[str]:
         '{ name = "Sudhir Gateway", '
         f'base_url = "{gateway_url}/v1", '
         'wire_api = "responses", requires_openai_auth = true, '
-        "supports_websockets = false, supports_standalone_web_search = true, "
+        f"supports_websockets = {str(os.environ.get('SUDHIR_CODEX_WEBSOCKETS', '1') != '0').lower()}, supports_standalone_web_search = true, "
         'env_http_headers = { "'
         + GATEWAY_TOKEN_HEADER
         + '" = "SUDHIR_CODEX_GATEWAY_TOKEN" } }'

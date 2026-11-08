@@ -358,6 +358,9 @@ BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"
         self.assertNotIn(f"CODEX_NODE_REPL_PATH={control.node_repl}", command)
         self.assertIn(f"CODEX_BROWSER_USE_NODE_PATH={control.node}", command)
         self.assertIn(f"--user-data-dir={self.profile}", command)
+        self.assertIn("--remote-debugging-address=127.0.0.1", command)
+        self.assertIn("--remote-debugging-port=0", command)
+        self.assertNotIn("BUILD_FLAVOR=dev", command)
 
     def test_launch_primary_rejects_unusable_official_cloud_executor(self) -> None:
         executor = (

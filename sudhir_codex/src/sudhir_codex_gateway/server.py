@@ -62,6 +62,13 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
             return
         parsed = urlsplit(self.path)
         try:
+            if parsed.path == "/v1/responses" and self.headers.get("Upgrade", "").lower() == "websocket":
+                if os.environ.get("SUDHIR_CODEX_WEBSOCKETS", "1") == "0":
+                    raise GatewayError(426, "http_transport_required", "WebSockets are disabled")
+                from .websocket_relay import relay
+
+                relay(self)
+                return
             if parsed.path == "/healthz":
                 self._send_buffered(self.gateway.app.health())
                 return

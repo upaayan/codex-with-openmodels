@@ -28,6 +28,7 @@ def build_cursor_turn(
     request: dict[str, Any],
     *,
     fallback_cwd: Path | None = None,
+    default_cwd: Path | None = None,
 ) -> CursorTurn:
     """Build a self-contained prompt and require a verified working directory."""
 
@@ -55,7 +56,7 @@ def build_cursor_turn(
             for match in CWD_PATTERN.finditer(context_text):
                 candidate_cwds.append(html.unescape(match.group(1).strip()))
 
-    cwd = _verified_cwd(candidate_cwds, fallback_cwd)
+    cwd = _verified_cwd(candidate_cwds, fallback_cwd, default_cwd)
     if not transcript:
         raise GatewayError(
             400,
@@ -71,13 +72,31 @@ def build_cursor_turn(
     return CursorTurn(cwd=cwd, prompt=prompt)
 
 
-def _verified_cwd(candidates: list[str], fallback: Path | None) -> Path:
+def estimate_prompt_tokens(text: str) -> int:
+    """Approximate prompt tokens from the text the gateway sent to Cursor.
+
+    Cursor SDK ``usage.inputTokens`` is the native agent-loop total, not the
+    OpenAI-compatible prompt size. Publishing that number as ``prompt_tokens``
+    makes dsh/pi-ai treat a successful ``stop`` as ``CONTEXT_WINDOW_EXCEEDED``.
+    """
+    if not text:
+        return 0
+    return max(1, (len(text) + 3) // 4)
+
+
+def _verified_cwd(
+    candidates: list[str],
+    fallback: Path | None,
+    default: Path | None = None,
+) -> Path:
     values: list[Path] = []
     for candidate in reversed(candidates):
         if candidate:
             values.append(Path(candidate).expanduser())
     if fallback is not None:
         values.append(fallback)
+    if default is not None:
+        values.append(default)
 
     for value in values:
         if value.is_absolute() and value.is_dir():

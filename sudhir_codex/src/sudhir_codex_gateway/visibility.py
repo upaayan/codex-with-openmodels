@@ -14,7 +14,7 @@ def apply_model_visibility(
     document: dict[str, list[dict[str, Any]]],
     policy_path: Path,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Set picker visibility without removing any model route from the catalog."""
+    """Set picker visibility and priority without removing any model route."""
 
     policy = _load_policy(policy_path)
     if policy is None:
@@ -31,6 +31,14 @@ def apply_model_visibility(
         if _matches(slug, hide_patterns):
             visibility = "hide"
         model["visibility"] = visibility
+
+    # The desktop reads only the first 100 entries, including hidden models.
+    # Keep enabled models first while preserving priority order in each group.
+    ordered = sorted(document["models"], key=lambda model: model.get("priority", 0))
+    ordered.sort(key=lambda model: model.get("visibility") != "list")
+    for priority, model in enumerate(ordered):
+        model["priority"] = priority
+    document["models"] = ordered
     return document
 
 

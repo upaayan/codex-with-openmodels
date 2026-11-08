@@ -4,6 +4,29 @@ This is the durable index of reproduced Sudhir-Codex defects and their repair
 status. A fixed entry remains here so a later backend or gateway upgrade does
 not accidentally reintroduce it.
 
+## SC-BUG-2026-10-04-001 — Enabled Cursor models fall beyond the picker's first page
+
+- **Status:** Fixed and activated locally; Astra/max PASS with zero findings.
+  Live gateway and installed-backend first-page acceptance passed: all 54
+  enabled routes, including the four targets at positions 51–54. GUI rendering
+  has not been separately observed. No remote release is claimed.
+- **Area:** Gateway catalog priorities / official desktop picker compatibility.
+- **Root cause:** The desktop requests the first 100 models including hidden
+  entries, then ignores `nextCursor`. Rust pages before the UI filters visibility.
+  The four enabled Cursor Grok 4.6/4.7 routes were entries 104–107 of 107.
+- **Fix:** After applying private visibility, stably order enabled models ahead
+  of hidden models and renumber priorities. Retain all routes and inference
+  metadata on live and cached responses. No Rust or signed-app change.
+- **Limit:** At most 100 enabled models fit this unpaginated frontend.
+- **Upgrade guard:** Preserve `visibility.py`, the focused first-page regression,
+  its `SC-CATALOG-002` wrapper/register, targeted membership and verifier checks.
+  Existing source CI exercises them; do not accept a replacement that loses them.
+
+See the private record
+`documents/plan-audit-implementation/picker_catalog_pagination_implementation.md`
+and section "Picker catalog pagination preservation" of the private
+`documents/BACKEND-MONTHLY-UPGRADE.md`.
+
 ## SC-BUG-2026-09-04-001 — Computer Use template lookup prevents launcher startup
 
 - **Status:** Fixed locally, live Computer Use verified, Opus PASS with zero
@@ -48,8 +71,10 @@ Keep `_frontend_transition_control.py`, the five upgrade regressions in
 `test_frontend_transition.py`, and their `GATEWAY_TESTS` membership together.
 The existing `gateway-linux` source-CI lane runs them. Candidate reconciliation
 must retain all three; tests and the runner sit outside gateway source parity.
-See [backend preservation](../BACKEND-MONTHLY-UPGRADE.md#computer-use-launcher-repair-preservation--2026-09-04)
-and [current frontend checks](../FRONTEND-UPDATE.md#checks-before-accepting-an-upgrade).
+See section "Computer Use launcher repair preservation" of the private
+`documents/BACKEND-MONTHLY-UPGRADE.md`
+and section "Checks before accepting an upgrade" of the private
+`documents/FRONTEND-UPDATE.md`.
 Stable paths and the preserved IPC-2 instruction lineage survive cache updates;
 a deliberate future runtime/API refresh needs owner approval and full validation.
 

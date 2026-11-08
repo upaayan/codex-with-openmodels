@@ -1,3 +1,11 @@
+# Owner collaboration boundary
+
+Before changing implementation layers or starting an expensive build or
+deployment, summarize the evidence, proposed component, alternatives, and
+expected impact for the owner. Capability is not authorization. When an
+unchanged component worked recently, identify the intervening frontend,
+configuration, or runtime-state change first.
+
 # Sudhir-Codex Computer Use
 
 When a task requires Computer Use, use the Codex-local `computer-use` skill at

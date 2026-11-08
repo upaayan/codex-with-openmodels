@@ -212,6 +212,8 @@ def launch_primary(paths: TransitionPaths) -> None:
         "--args",
         f"--user-data-dir={paths.profile}",
     ]
+    if os.environ.get("SUDHIR_CODEX_DEVTOOLS", "1") != "0":
+        command.extend(["--remote-debugging-address=127.0.0.1", "--remote-debugging-port=0"])
     subprocess.run(command, check=True)
 
 
@@ -340,12 +342,24 @@ def status_primary(paths: TransitionPaths) -> dict[str, Any]:
     primary_home_active = any(
         _process_has_open_path(pid, primary_socket) for pid in main_pids
     )
+    devtools = {"endpointAvailable": False, "consoleVerified": False}
+    port_file = paths.profile / "DevToolsActivePort"
+    if main_pids and port_file.is_file():
+        try:
+            port = int(port_file.read_text().splitlines()[0])
+            if 0 < port < 65536:
+                import socket
+                with socket.create_connection(("127.0.0.1", port), timeout=0.25):
+                    devtools.update(endpointAvailable=True, discoveryUrl=f"http://127.0.0.1:{port}")
+        except (OSError, ValueError, IndexError):
+            pass
     return {
         "running": bool(main_pids),
         "appServerRunning": app_server_running,
         "primaryHomeActive": primary_home_active,
         "primaryState": str(paths.primary_state),
         "transitionProfile": str(paths.profile),
+        "devtools": devtools,
     }
 
 

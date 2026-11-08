@@ -328,6 +328,10 @@ X-Test = "value"
         joined = "\n".join(argv)
 
         self.assertIn('model_provider="sudhir_gateway"', joined)
+        self.assertIn("supports_websockets = true", joined)
+        with mock.patch.dict(os.environ, {"SUDHIR_CODEX_WEBSOCKETS": "0"}):
+            disabled = "\n".join(_forced_config("http://127.0.0.1:32179"))
+        self.assertIn("supports_websockets = false", disabled)
         self.assertIn(
             f'"{GATEWAY_TOKEN_HEADER}" = "SUDHIR_CODEX_GATEWAY_TOKEN"',
             joined,

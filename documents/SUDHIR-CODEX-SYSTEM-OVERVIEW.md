@@ -1,5 +1,11 @@
 # Sudhir-Codex System Overview
 
+## Current Mac runtime — 2026-10-22
+
+`dist/release-evidence/in-progress/upgrade-0163-20261022/release-record.json` is authoritative. Installed custom Mac core **0.163.0**, `15e5751849d0954d99d08da0141978a02692a88e`, tag `openmodels-v0.1.0-rc.18-codex0163-blacksmith.2`, native Blacksmith run 39820837415 accepted. Actual/effective catalog 0.163.0, no pin; all seven previous GPT choices retained. Two startups and live GPT WebSocket/Pi HTTP/existing-history smoke PASS; final Opus/high Round 12 PASS (0 high, 0 medium, 0 low). Architecture remains the small signed Swift launcher plus official production frontend, private Python gateway, custom native core, and stable control/cloud executors. GPT inference WebSockets and external loopback DevTools are enabled with private environment opt-outs. Pi/Cursor HTTP, credential isolation, task picker defaults, plaintext children and control/cloud selectors are preserved. Official app bytes/provider identity unchanged. Legacy mcp-server removal was explicitly accepted by owner. Console usability, live cloud-to-Mac task and Urvashi sidebar visibility remain unverified. WSL remains at its prior release, and the Linux server installs are retired.
+
+The first activation automatically restored 0.153.4 when a September 0.159 catalog pin was detected. Reviewed retry captured/cleared that pin, then passed. Matched reversal is `dist/backups/pre-sudhir-0163-20261022-catalog`; see current backend procedure for executable reversal including exact override and six DB snapshots. This upgrade used direct launch_primary to preserve the active official app; the normal launcher diagram below still describes its existing ensure-primary entrypoint.
+
 **Audience:** System owner and repair operator
 
 **Architecture:** Small transition launcher using the official ChatGPT app
@@ -29,7 +35,7 @@ Recovery is therefore based on four things:
 1. identify which layer failed before changing anything;
 2. keep the official application and Sudhir-owned state separate;
 3. restore only the damaged managed entries from a versioned recovery point;
-4. validate and copy each known-good recovery point to the backup server.
+4. validate each known-good recovery point and keep it on the Mac.
 
 ## 1. Components and how they interact
 
@@ -69,7 +75,7 @@ used by that frontend; it does not copy or edit the official application.
 | `/Applications/ChatGPT.app` | OpenAI | Electron UI, task composer, model picker, bundled plugins and Node resources | Can auto-update |
 | `/Applications/Sudhir-Codex.app` | Sudhir-Codex | Small signed launcher; calls `ensure-primary` | Changes only when we deliberately replace the launcher |
 | `scripts/gpt-pro-frontend-transition` | Sudhir-Codex | Validates the official app, repairs managed control wiring, and starts the official app with Sudhir paths | Maintained in the backend repository; no Rust build is needed |
-| `dist/sudhir-codex-core` | Sudhir-Codex | Private app-server/backend used by the UI; currently `openmodels-v0.1.0-rc.13` | Built by GitHub Actions only for an approved backend change |
+| `dist/sudhir-codex-core` | Sudhir-Codex | Private app-server/backend used by the UI; currently 0.163.0 / `openmodels-v0.1.0-rc.18-codex0163-blacksmith.2` | Built by GitHub Actions only for an approved backend change |
 | `dist/codex-code-mode-host` and `dist/codex-responses-api-proxy` | Sudhir-Codex | Native helpers shipped with the same backend release | Activated and rolled back with the core binary as one release set |
 | `~/.local/bin/sudhir-codex` | Sudhir-Codex | CLI wrapper selected by the official frontend | Maintained by us |
 | `~/.sudhir-codex` | Sudhir-Codex, with some frontend/plugin writes | Primary config, sessions, model state, gateway state, plugins and controls | Writable live state; must be backed up |
@@ -232,8 +238,11 @@ We can also prevent a bad repair from becoming permanent by using:
 - a known-good repaired copy;
 - a small managed-settings reference;
 - file hashes and official-app version/build metadata;
-- local versioned directories that are never overwritten;
-- a byte-for-byte verified copy on the backup server.
+- local versioned directories that are never overwritten.
+
+These exist only on the Mac. The Sudhir-Codex installs on the backup and mock
+servers were retired (26 September and 8 November 2026), so there is no server
+copy.
 
 ### 4.2 What cannot be prevented by the launcher alone
 
@@ -250,7 +259,8 @@ For the September Computer Use template repair, the stable skill is
 `~/.sudhir-codex/control/plugin-assets`, `control/original-plugins/<version>`
 and `control/original-plugin-*`. The preserved legacy runtime/recovery root is
 `~/.sudhir-codex-chatgpt/frontend-control-runtime`. These are different roles,
-not competing versions. See [the current frontend procedure](FRONTEND-UPDATE.md)
+not competing versions. See the current frontend procedure, the private
+`documents/FRONTEND-UPDATE.md` (on the Mac only),
 for template priority and upgrade checks. Preserve the control module, its five
 regressions and targeted-runner entries together in future gateway upgrades.
 
@@ -268,14 +278,7 @@ It contains:
 - `config.toml.repaired-final` — final known-good config;
 - `managed-trust-entries.toml` — only the four managed trust entries.
 
-The same four files exist on the backup server at:
-
-```text
-/home/ubuntu/.sudhir-codex/config-backups/
-trust-repair-20260820T035726Z/
-```
-
-Their local and remote SHA-256 values match. The final repaired config's hash
+The final repaired config's hash
 is `37276c90973570092e83850217e7719db821ab498fea0473ea0489c4ff2e7cea`.
 The managed fragment's hash is
 `4a245cd67254ee571a9a54fcdbc9f2b21dd13a69fdf864448ddbce970aa89f70`.
@@ -305,9 +308,9 @@ The durable candidate is stored at:
 openmodels-v0.1.0-rc.13/
 ```
 
-The pre-`rc.13` Mac rollback retained at that time no longer exists, either in
-`dist/backups/` or in the backup server's `backend-backups/` (checked 8 November
-2026). The current matched reversal is
+The pre-`rc.13` Mac rollback retained at that time no longer exists in
+`dist/backups/` (checked 8 November 2026), and the backup server's copy went when
+that install was retired. The current matched reversal is
 `dist/backups/pre-sudhir-0163-20261022-catalog`.
 
 ### 4.4 Build once, test after the build
@@ -330,8 +333,7 @@ After every official ChatGPT update:
 2. run the transition status and managed-config validator;
 3. launch Sudhir-Codex and verify app-server/control health;
 4. test one fresh non-GPT draft and one existing-task model change;
-5. if successful, create a new dated recovery point and copy it to the backup
-   server;
+5. if successful, create a new dated recovery point;
 6. if the fresh draft snaps back, inspect the actual picker RPC and response:
    `config/batchWrite` with an unchanged GPT default is an app-server contract
    problem; no update RPC is an official-frontend compatibility problem.
@@ -364,6 +366,16 @@ git -C ~/.playground/sudhir-codex checkout <commit> -- \
 
 Known gateway changes to preserve:
 
+- Pi SDK **1.5.0** and nullable auth-header deletion (2026-11-07): the Node
+  worker preserves string/null OAuth provider-auth headers; Python validates them
+  and consumes case-insensitive deletion markers before HTTP. Carry the
+  package/lock, worker, Python parser/merge, tests and upgrade manifests as one
+  unit. Node >=22.19.0 is required; Cursor SDK remains 1.0.23. See
+  the private record `documents/plan-audit-implementation/pi_150_gateway_implementation.md`
+  and the private backend runbook's Pi SDK preservation section. The standalone Pi CLI
+  has a separate installation and does not determine the gateway SDK version.
+  The built-in xAI default also follows Pi's Responses API; explicit API
+  overrides remain authoritative, including non-reasoning Chat Completions.
 - `b80c38232` — accept chat-style untyped message items from pi-ai (dsh); also
   normalizes string `content`. Fixes `unsupported_input_item` and
   `invalid_content` for chat-completions open models reached through dsh.

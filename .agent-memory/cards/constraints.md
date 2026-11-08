@@ -3,7 +3,7 @@ card: constraints
 status: active
 source: owner-confirmed
 inject: always
-updated: 2026-08-23
+updated: 2026-09-13
 ---
 # Constraints
 - Read the owner runbook before maintenance. No git worktrees. Never modify `.git/config`. Ask before destructive cleanup or deleting rollback/build artifacts (`AGENTS.md`).
@@ -11,3 +11,5 @@ updated: 2026-08-23
 - No native Windows Rust release. Windows runs the Linux x64 MUSL backend inside WSL2. Keep official Codex state, private Sudhir state, frontend state, and backend state separate — no symlinks between them.
 - Gateway binds loopback `127.0.0.1:32179`. Never modify the official ChatGPT application in place. Keep dated rollback copies.
 - Never print `~/.sudhir-codex/auth.json`, `~/.codex/auth.json`, or gateway tokens.
+- AWS Secrets Manager: `--force-delete-without-recovery` is not allowed.
+- AWS Secrets Manager: always take a backup before deleting any secret. Do not delete first.

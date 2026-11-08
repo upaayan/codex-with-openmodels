@@ -113,6 +113,77 @@ class CredentialTests(unittest.TestCase):
         )
         self.assertEqual(resolved.base_url, "https://auth-selected.example/v1")
 
+    def test_oauth_header_deletions_survive_worker_and_merge(self) -> None:
+        from sudhir_codex_gateway.pi_auth_worker import PiAuthWorkerClient
+
+        cases = (
+            (
+                "openai-completions",
+                {"aUtHoRiZaTiOn": None, "X-Provider-Auth": "extension-value"},
+                {"X-Provider-Auth": "extension-value"},
+            ),
+            (
+                "anthropic-messages",
+                {
+                    "X-API-KEY": None,
+                    "X-Unset": None,
+                    "X-Provider-Auth": "extension-value",
+                },
+                {
+                    "anthropic-version": "2023-06-01",
+                    "X-Provider-Auth": "extension-value",
+                },
+            ),
+            (
+                "openai-completions",
+                {"AUTHORIZATION": "Bearer replacement", "Host": "forbidden.example"},
+                {"AUTHORIZATION": "Bearer replacement"},
+            ),
+        )
+        write_json(self.pi_dir / "auth.json", {"demo": {"type": "oauth"}})
+        worker = PiAuthWorkerClient(worker_script=Path("unused"), agent_dir=self.pi_dir)
+        for api, headers, expected in cases:
+            with self.subTest(api=api, headers=headers):
+                document = basic_pi_document()
+                document["providers"]["demo"]["api"] = api
+                model = self.model(document)
+                response = {
+                    "ok": True,
+                    "provider": model.provider_id,
+                    "model": model.upstream_id,
+                    "api": model.api,
+                    "apiKey": "pi-derived-access",
+                    "headers": headers,
+                    "baseUrl": None,
+                }
+                with patch.object(worker, "_exchange", return_value=response):
+                    resolved = CredentialResolver(
+                        self.pi_dir / "auth.json", oauth_worker=worker
+                    ).resolve(model)
+                self.assertEqual(resolved.headers, expected)
+
+    def test_oauth_worker_rejects_invalid_auth_header_values(self) -> None:
+        from sudhir_codex_gateway.pi_auth_worker import PiAuthWorkerClient
+
+        model = self.model(basic_pi_document())
+        worker = PiAuthWorkerClient(worker_script=Path("unused"), agent_dir=self.pi_dir)
+        for value in (True, 42, [], {}):
+            with self.subTest(value=value):
+                response = {
+                    "ok": True,
+                    "provider": model.provider_id,
+                    "model": model.upstream_id,
+                    "api": model.api,
+                    "apiKey": "pi-derived-access",
+                    "headers": {"Authorization": value},
+                    "baseUrl": None,
+                }
+                with (
+                    patch.object(worker, "_exchange", return_value=response),
+                    self.assertRaisesRegex(GatewayError, "invalid data"),
+                ):
+                    worker.resolve(model)
+
     def test_anthropic_route_uses_messages_headers(self) -> None:
         document = basic_pi_document()
         document["providers"]["demo"]["models"][0]["api"] = "anthropic-messages"

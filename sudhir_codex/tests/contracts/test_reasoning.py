@@ -86,6 +86,10 @@ class ReasoningContracts(unittest.TestCase):
                     _anthropic.AnthropicAdapterTests,
                     "test_round_trips_thinking_text_and_opaque_signature",
                 ),
+                (
+                    _adapter.AdapterTests,
+                    "test_native_google_signature_carrier_survives_tool_loop_translation",
+                ),
             ),
         )
 
