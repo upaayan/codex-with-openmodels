@@ -57,7 +57,7 @@ Active proxy:        ~/.playground/sudhir-codex/dist/codex-responses-api-proxy
 Known-good repair:   ~/.sudhir-codex/config-backups/trust-repair-20260820T035726Z
 rc.13 evidence:      ~/.playground/sudhir-codex/dist/release-evidence/openmodels-v0.1.0-rc.13
 Current rollback:    ~/.playground/sudhir-codex/dist/backups/pre-sudhir-0163-20261022-catalog
-Backup server:       ubuntu@216.48.177.217
+Backup server:       ubuntu@$BACKUP_HOST (set BACKUP_HOST to the server's address first)
 Remote repair root:  /home/ubuntu/.sudhir-codex/config-backups
 ```
 
@@ -358,11 +358,11 @@ remote_root=/home/ubuntu/.sudhir-codex/config-backups
 remote_name="trust-repair-${repair_stamp}"
 remote_dir="$remote_root/$remote_name"
 remote_incoming="$remote_root/.${remote_name}.incoming"
-ssh -o BatchMode=yes ubuntu@216.48.177.217 \
+ssh -o BatchMode=yes ubuntu@$BACKUP_HOST \
   "test ! -e '$remote_dir' && test ! -e '$remote_incoming' && mkdir -m 700 -p '$remote_incoming'"
 rsync -a --partial "$repair_dir/" \
-  "ubuntu@216.48.177.217:$remote_incoming/"
-ssh -o BatchMode=yes ubuntu@216.48.177.217 \
+  "ubuntu@$BACKUP_HOST:$remote_incoming/"
+ssh -o BatchMode=yes ubuntu@$BACKUP_HOST \
   "find '$remote_incoming' -type f -exec chmod 600 {} + && cd '$remote_incoming' && sha256sum -c SHA256SUMS && mv '$remote_incoming' '$remote_dir'"
 ```
 
@@ -518,10 +518,10 @@ remote_root=/home/ubuntu/.sudhir-codex/backend-backups
 remote_name=pre-openmodels-v0.1.0-rc.13-20260820T130328Z
 remote="$remote_root/$remote_name"
 incoming="$remote_root/.${remote_name}.incoming"
-ssh -o BatchMode=yes ubuntu@216.48.177.217 \
+ssh -o BatchMode=yes ubuntu@$BACKUP_HOST \
   "test ! -e '$remote' && test ! -e '$incoming' && mkdir -m 700 -p '$incoming'"
-rsync -a --partial "$backup/" "ubuntu@216.48.177.217:$incoming/"
-ssh -o BatchMode=yes ubuntu@216.48.177.217 \
+rsync -a --partial "$backup/" "ubuntu@$BACKUP_HOST:$incoming/"
+ssh -o BatchMode=yes ubuntu@$BACKUP_HOST \
   "find '$incoming' -type f -exec chmod 600 {} + && cd '$incoming' && sha256sum -c SHA256SUMS && mv '$incoming' '$remote'"
 ```
 
@@ -828,7 +828,7 @@ so the two rollback checks below will fail.
   /Users/sudhirjha/.playground/sudhir-codex/dist/codex-responses-api-proxy
 ( cd /Users/sudhirjha/.playground/sudhir-codex/dist/backups/pre-openmodels-v0.1.0-rc.13-20260820T130328Z && \
   /usr/bin/shasum -a 256 -c SHA256SUMS )
-ssh -o BatchMode=yes ubuntu@216.48.177.217 \
+ssh -o BatchMode=yes ubuntu@$BACKUP_HOST \
   "cd /home/ubuntu/.sudhir-codex/backend-backups/pre-openmodels-v0.1.0-rc.13-20260820T130328Z && sha256sum -c SHA256SUMS"
 ```
 
