@@ -56,10 +56,9 @@ Active code host:    ~/.playground/sudhir-codex/dist/codex-code-mode-host
 Active proxy:        ~/.playground/sudhir-codex/dist/codex-responses-api-proxy
 Known-good repair:   ~/.sudhir-codex/config-backups/trust-repair-20260820T035726Z
 rc.13 evidence:      ~/.playground/sudhir-codex/dist/release-evidence/openmodels-v0.1.0-rc.13
-rc.13 rollback:      ~/.playground/sudhir-codex/dist/backups/pre-openmodels-v0.1.0-rc.13-20260820T130328Z
+Current rollback:    ~/.playground/sudhir-codex/dist/backups/pre-sudhir-0163-20261022-catalog
 Backup server:       ubuntu@216.48.177.217
 Remote repair root:  /home/ubuntu/.sudhir-codex/config-backups
-Remote Rust backup:  /home/ubuntu/.sudhir-codex/backend-backups/pre-openmodels-v0.1.0-rc.13-20260820T130328Z
 ```
 
 Use absolute paths in repair commands. Do not use a broad recursive copy of
@@ -492,8 +491,9 @@ Expected: the archive and all three staged hashes pass, every binary is Mach-O
 
 ### 6.5 Preserve the current release before activation
 
-Create a never-overwrite directory. This example is the retained rollback from
-the verified 20 August activation; use a new UTC stamp for a later release.
+Create a never-overwrite directory. This example uses the name from the verified
+20 August activation, whose folder no longer exists; use a new name and UTC stamp
+for a later release.
 
 ```bash
 backup=/Users/sudhirjha/.playground/sudhir-codex/dist/backups/pre-openmodels-v0.1.0-rc.13-20260820T130328Z
@@ -563,8 +563,9 @@ reasoning effort `high`.
 
 ### 6.7 Atomic rollback if acceptance fails
 
-Close the Sudhir instance again. Verify the retained rollback before replacing
-anything:
+Close the Sudhir instance again. Verify the rollback you made in 6.5 before
+replacing anything. Set `backup` to that folder: the `rc.13` folder named below
+no longer exists (checked 8 November 2026).
 
 ```bash
 backup=/Users/sudhirjha/.playground/sudhir-codex/dist/backups/pre-openmodels-v0.1.0-rc.13-20260820T130328Z
@@ -815,6 +816,10 @@ Do not declare a repair complete until all items relevant to the symptom pass.
 - No unrelated global default was changed as a workaround.
 
 ### 10.3 `rc.13` Mac backend
+
+Historical check. `rc.13` is no longer the active backend, and its rollback
+folders no longer exist on the Mac or the backup server (checked 8 November 2026),
+so the two rollback checks below will fail.
 
 ```bash
 /usr/bin/shasum -a 256 \

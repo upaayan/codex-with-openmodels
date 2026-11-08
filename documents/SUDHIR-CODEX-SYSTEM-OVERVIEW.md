@@ -305,20 +305,10 @@ The durable candidate is stored at:
 openmodels-v0.1.0-rc.13/
 ```
 
-The one retained pre-`rc.13` Mac rollback is stored locally and on the backup
-server at:
-
-```text
-/Users/sudhirjha/.playground/sudhir-codex/dist/backups/
-pre-openmodels-v0.1.0-rc.13-20260820T130328Z/
-
-/home/ubuntu/.sudhir-codex/backend-backups/
-pre-openmodels-v0.1.0-rc.13-20260820T130328Z/
-```
-
-Both copies pass their `SHA256SUMS` manifest. Older standalone Rust binary
-backups were removed after that verification; unrelated configuration,
-launcher, gateway, frontend and archived-state material was preserved.
+The pre-`rc.13` Mac rollback retained at that time no longer exists, either in
+`dist/backups/` or in the backup server's `backend-backups/` (checked 8 November
+2026). The current matched reversal is
+`dist/backups/pre-sudhir-0163-20261022-catalog`.
 
 ### 4.4 Build once, test after the build
 
